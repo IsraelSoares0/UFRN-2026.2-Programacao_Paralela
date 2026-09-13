@@ -67,7 +67,9 @@
 
 \section{Introdução}
 
-Este relatório apresenta os resultados de dois programas em C, paralelizados com OpenMP, cujo objetivo é realizar $N$ inserções em listas encadeadas de forma concorrente, garantindo a integridade das estruturas de dados e evitando condições de corrida.
+Este relatório apresenta os resultados de dois programas em C, 
+cujo objetivo é realizar \textit{N} inserções em listas encadeadas de forma concorrente, 
+garantindo a integridade das estruturas de dados e evitando condições de corrida.
 
 O primeiro programa (\texttt{duas\_listas.c}) trabalha com um número fixo de duas listas e utiliza \emph{regiões críticas nomeadas} (\texttt{\#pragma omp critical(nome)}) para sincronizar o acesso a cada lista de forma independente. O segundo programa (\texttt{n\_listas.c}) generaliza a solução para um número $M$ de listas definido pelo usuário em tempo de execução, o que exige a substituição das regiões críticas nomeadas por um vetor de \emph{locks} explícitos (\texttt{omp\_lock\_t}), já que os nomes de regiões críticas precisam ser conhecidos em tempo de compilação.
 
@@ -104,7 +106,7 @@ Os dois programas foram executados para diferentes tamanhos de entrada. Para \te
 
 A Tabela~\ref{tab:duas} apresenta o número de elementos inseridos em cada lista, o percentual de cada lista em relação ao total, e a conferência do total inserido, para diferentes valores de $N$.
 
-\begin{table}[h]
+\begin{table}[ht]
 \centering
 \caption{Resultados de \texttt{duas\_listas.c} para diferentes valores de $N$}
 \label{tab:duas}
@@ -121,11 +123,11 @@ $N$ & Lista 1 & \% Lista 1 & Lista 2 & \% Lista 2 & Total confere \\
 \end{tabular}
 \end{table}
 
-\subsection{Programa generalizado para $M$ listas}
+\subsection{Programa generalizado para \textit{M} listas}
 
 A Tabela~\ref{tab:n} resume as execuções de \texttt{n\_listas.c} para $M \in \{4, 8, 16\}$ listas. Em vez de listar a contagem individual de cada uma das até 16 listas, apresentam-se estatísticas de balanceamento: o valor esperado por lista ($N/M$, assumindo distribuição perfeitamente uniforme), a menor e a maior contagem observadas entre as listas, e o desvio percentual de cada uma em relação ao valor esperado.
 
-\begin{table}[h]
+\begin{table}[ht]
 \centering
 \caption{Resultados de \texttt{n\_listas.c} para diferentes valores de $N$ e $M$}
 \label{tab:n}
