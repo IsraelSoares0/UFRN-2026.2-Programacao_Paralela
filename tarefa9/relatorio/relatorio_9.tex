@@ -1,0 +1,220 @@
+\documentclass[a4paper,12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black}
+
+\renewcommand{\tablename}{Tabela}
+\renewcommand{\lstlistingname}{Código}
+
+
+
+% ---------- Configuração do realce de sintaxe (C) ----------
+
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codecomment}{RGB}{0,128,0}
+\definecolor{codestring}{RGB}{163,21,21}
+\definecolor{framecolor}{RGB}{200,200,200}
+
+\lstdefinestyle{cstyle}{
+    language=C,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecomment}\itshape,
+    stringstyle=\color{codestring},
+    numberstyle=\tiny\color{gray},
+    numbers=left,
+    numbersep=6pt,
+    frame=single,
+    rulecolor=\color{framecolor},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    columns=flexible,
+    morekeywords={size_t},
+    extendedchars=true,
+    literate=
+        {á}{{\'a}}1 {à}{{\`a}}1 {â}{{\^a}}1 {ã}{{\~a}}1
+        {é}{{\'e}}1 {ê}{{\^e}}1 {í}{{\'i}}1
+        {ó}{{\'o}}1 {ô}{{\^o}}1 {õ}{{\~o}}1
+        {ú}{{\'u}}1 {ü}{{\"u}}1 {ç}{{\c c}}1
+        {Á}{{\'A}}1 {À}{{\`A}}1 {Â}{{\^A}}1 {Ã}{{\~A}}1
+        {É}{{\'E}}1 {Ê}{{\^E}}1 {Í}{{\'I}}1
+        {Ó}{{\'O}}1 {Ô}{{\^O}}1 {Õ}{{\~O}}1
+        {Ú}{{\'U}}1 {Ü}{{\"U}}1 {Ç}{{\c C}}1
+}
+
+
+
+\title{Tarefa 9: Regiões críticas nomeadas e Locks explícitos}
+\author{Israel Soares de Castro Filho \\ Matrícula: 20250070780}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Introdução}
+
+Este relatório apresenta os resultados de dois programas em C, paralelizados com OpenMP, cujo objetivo é realizar $N$ inserções em listas encadeadas de forma concorrente, garantindo a integridade das estruturas de dados e evitando condições de corrida.
+
+O primeiro programa (\texttt{duas\_listas.c}) trabalha com um número fixo de duas listas e utiliza \emph{regiões críticas nomeadas} (\texttt{\#pragma omp critical(nome)}) para sincronizar o acesso a cada lista de forma independente. O segundo programa (\texttt{n\_listas.c}) generaliza a solução para um número $M$ de listas definido pelo usuário em tempo de execução, o que exige a substituição das regiões críticas nomeadas por um vetor de \emph{locks} explícitos (\texttt{omp\_lock\_t}), já que os nomes de regiões críticas precisam ser conhecidos em tempo de compilação.
+
+O objetivo deste relatório é analisar as saídas produzidas pelos dois programas para diferentes valores de $N$ (e de $M$, no segundo caso), verificando a corretude das inserções e o balanceamento da distribuição aleatória entre as listas.
+
+\section{Metodologia}
+
+Ambos os programas seguem a mesma estrutura geral: 
+dentro de uma região \texttt{\#pragma omp parallel}, 
+uma única thread, definida pela diretiva \texttt{\#pragma omp single}, executa o laço \texttt{for}.
+Em cada iteração, a diretiva \texttt{\#pragma omp task} cria uma nova tarefa, totalizando \textbf{N tarefas}.
+Essas tarefas são então distribuídas dinamicamente entre as threads da região paralela pela execução.
+
+Cada tarefa sorteia, de forma independente, um número de lista e um valor inteiro a ser inserido, utilizando 
+um gerador Xorshift32 com uma semente própria (\texttt{firstprivate}), tornando o sorteio thread-safe e dispensando
+sincronização nessa etapa.
+
+\begin{itemize}
+    \item Em \texttt{duas\_listas.c}, a lista sorteada é 
+    sempre \texttt{lista1} ou \texttt{lista2}, 
+    e a inserção é protegida por duas regiões críticas nomeadas 
+    distintas, permitindo que inserções em listas diferentes ocorram em paralelo.
+    \item Em \texttt{n\_listas.c}, o número de listas $M$ é lido em tempo de execução. 
+    Um vetor de $M$ locks (\texttt{omp\_lock\_t}) é criado dinamicamente, 
+    um para cada lista, e a inserção na lista de índice \texttt{idx} 
+    é protegida por \texttt{omp\_set\_lock(\&locks[idx])} e \texttt{omp\_unset\_lock(\&locks[idx])}.
+\end{itemize}
+
+Os dois programas foram executados para diferentes tamanhos de entrada. Para \texttt{duas\_listas.c}, o número de inserções $N$ variou entre 20 e 200.000. Para \texttt{n\_listas.c}, o número de inserções variou entre 40 e 400.000, combinado com $M \in \{4, 8, 16\}$ listas. Ao final de cada execução, o programa imprime a quantidade de elementos em cada lista, permitindo verificar se a soma dos elementos de todas as listas é igual ao número de inserções solicitado (o que indicaria ausência de perdas ou duplicações causadas por condições de corrida).
+
+\section{Resultados}
+
+\subsection{Programa com duas listas}
+
+A Tabela~\ref{tab:duas} apresenta o número de elementos inseridos em cada lista, o percentual de cada lista em relação ao total, e a conferência do total inserido, para diferentes valores de $N$.
+
+\begin{table}[h]
+\centering
+\caption{Resultados de \texttt{duas\_listas.c} para diferentes valores de $N$}
+\label{tab:duas}
+\begin{tabular}{@{}rrrrrc@{}}
+\toprule
+$N$ & Lista 1 & \% Lista 1 & Lista 2 & \% Lista 2 & Total confere \\
+\midrule
+20      & 10     & 50{,}00\% & 10     & 50{,}00\% & Sim \\
+200     & 92     & 46{,}00\% & 108    & 54{,}00\% & Sim \\
+2.000   & 1.025  & 51{,}25\% & 975    & 48{,}75\% & Sim \\
+20.000  & 10.071 & 50{,}35\% & 9.929  & 49{,}65\% & Sim \\
+200.000 & 100.079& 50{,}04\% & 99.921 & 49{,}96\% & Sim \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Programa generalizado para $M$ listas}
+
+A Tabela~\ref{tab:n} resume as execuções de \texttt{n\_listas.c} para $M \in \{4, 8, 16\}$ listas. Em vez de listar a contagem individual de cada uma das até 16 listas, apresentam-se estatísticas de balanceamento: o valor esperado por lista ($N/M$, assumindo distribuição perfeitamente uniforme), a menor e a maior contagem observadas entre as listas, e o desvio percentual de cada uma em relação ao valor esperado.
+
+\begin{table}[h]
+\centering
+\caption{Resultados de \texttt{n\_listas.c} para diferentes valores de $N$ e $M$}
+\label{tab:n}
+\begin{tabular}{@{}rrrrrrc@{}}
+\toprule
+$N$ & $M$ & Esperado/lista & Mín. & Desvio mín. & Máx. & Desvio máx. \\
+\midrule
+40      & 4  & 10{,}0     & 3     & $-70{,}00\%$ & 16    & $+60{,}00\%$ \\
+400     & 4  & 100{,}0    & 97    & $-3{,}00\%$  & 105   & $+5{,}00\%$  \\
+4.000   & 4  & 1.000{,}0  & 970   & $-3{,}00\%$  & 1.024 & $+2{,}40\%$  \\
+40.000  & 4  & 10.000{,}0 & 9.939 & $-0{,}61\%$  & 10.068& $+0{,}68\%$  \\
+400.000 & 4  & 100.000{,}0& 99.544& $-0{,}46\%$  & 100.667& $+0{,}67\%$ \\
+\midrule
+400     & 8  & 50{,}0     & 38    & $-24{,}00\%$ & 61    & $+22{,}00\%$ \\
+4.000   & 8  & 500{,}0    & 481   & $-3{,}80\%$  & 519   & $+3{,}80\%$  \\
+40.000  & 8  & 5.000{,}0  & 4.879 & $-2{,}42\%$  & 5.083 & $+1{,}66\%$  \\
+400.000 & 8  & 50.000{,}0 & 49.710& $-0{,}58\%$  & 50.161& $+0{,}32\%$  \\
+\midrule
+400     & 16 & 25{,}0     & 16    & $-36{,}00\%$ & 35    & $+40{,}00\%$ \\
+4.000   & 16 & 250{,}0    & 221   & $-11{,}60\%$ & 284   & $+13{,}60\%$ \\
+40.000  & 16 & 2.500{,}0  & 2.399 & $-4{,}04\%$  & 2.561 & $+2{,}44\%$  \\
+400.000 & 16 & 25.000{,}0 & 24.735& $-1{,}06\%$  & 25.202& $+0{,}81\%$  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Em todas as execuções, tanto de \texttt{duas\_listas.c} quanto de \texttt{n\_listas.c}, a soma dos elementos de todas as listas foi exatamente igual ao número $N$ de inserções solicitado, sem nenhuma perda ou duplicação de nós.
+
+\section{Análise}
+
+\textbf{Corretude.} Em todas as execuções, a soma dos elementos das listas foi exatamente igual a $N$, tanto em \texttt{duas\_listas.c} quanto em \texttt{n\_listas.c} (Tabelas~\ref{tab:duas} e \ref{tab:n}). Isso confirma que as duas estratégias de exclusão mútua utilizadas -- regiões críticas nomeadas em um caso, locks explícitos no outro -- protegeram corretamente o acesso concorrente às listas: nenhuma tarefa perdeu ou duplicou um nó ao inserir simultaneamente com outra.
+
+\textbf{Balanceamento entre listas.} Como cada tarefa escolhe a lista de destino de forma aleatória e uniforme, o número esperado de elementos por lista é $N/2$ em \texttt{duas\_listas.c} e $N/M$ em \texttt{n\_listas.c}. As oscilações em torno desse valor esperado diminuem à medida que $N$ cresce (Lei dos Grandes Números) e aumentam à medida que $M$ cresce para um mesmo $N$, já que cada lista passa a receber, em média, menos inserções e amostras menores variam proporcionalmente mais. Isso é visível comparando, por exemplo, $N=400$ com $M=4$ (desvio máximo de $+5\%$) e $N=400$ com $M=16$ (desvio máximo de $+40\%$) na Tabela~\ref{tab:n}. Esses desvios são um efeito estatístico do sorteio, não um sintoma de falha de sincronização.
+
+\textbf{Por que regiões críticas nomeadas não são suficientes quando $M$ é dinâmico.} Em \texttt{duas\_listas.c} o número de listas é fixo e igual a 2, conhecido já no código-fonte. Isso torna viável criar, à mão, uma região crítica nomeada para cada lista -- \texttt{\#pragma omp critical(lista1\_critico)} e \texttt{\#pragma omp critical(lista2\_critico)} -- de modo que inserções em listas diferentes não disputem o mesmo mutex e possam ocorrer em paralelo, enquanto inserções na mesma lista são serializadas.
+
+O problema é que o nome que aparece dentro dos parênteses de:
+
+\texttt{\#pragma omp critical(nome)} 
+
+É um identificador fixado em tempo de compilação: ele precisa existir como texto no 
+código-fonte antes mesmo de o programa rodar. Em \texttt{n\_listas.c}, 
+o número de listas $M$ é lido de \texttt{argv} em tempo de execução, 
+então não há como o compilador saber, ao gerar o binário, se serão 
+necessárias 4, 8, 16 ou qualquer outra quantidade de regiões críticas -- 
+não é possível escrever "de antemão" um nome de região crítica para cada 
+uma das $M$ listas, pois $M$ ainda não existe nesse momento.
+
+\textbf{Por que locks explícitos resolvem o problema.} A diferença essencial 
+é que um \texttt{omp\_lock\_t} não é um identificador textual do código-fonte, 
+mas um objeto em memória que pode ser criado, indexado e manipulado em tempo de 
+execução. Em \texttt{n\_listas.c}, isso é usado da seguinte forma:
+
+\begin{enumerate}
+    \item Um vetor de $M$ locks é alocado dinamicamente depois que $M$ é conhecido: \\
+    \texttt{omp\_lock\_t *locks = malloc((size\_t)M * sizeof(omp\_lock\_t));}
+    \item Cada posição do vetor é inicializada em um laço \texttt{for}, algo que só faz sentido porque $M$ é uma variável, não uma constante de compilação:\\
+    \texttt{for (int i = 0; i < M; i++) omp\_init\_lock(\&locks[i]);}
+    \item Dentro de cada tarefa, o índice \texttt{idx} da lista sorteada é usado para indexar o vetor de locks em tempo de execução
+\end{enumerate}
+
+Assim, obtém-se exatamente a mesma propriedade que as regiões críticas nomeadas 
+forneciam em \texttt{duas\_listas.c} -- um mutex 
+independente por lista, permitindo que inserções em listas diferentes 
+ocorram verdadeiramente em paralelo, enquanto inserções na mesma lista se sincronizam 
+entre si -- só que com a quantidade de mutexes decidida em tempo de execução, e não 
+fixada no código-fonte. 
+
+Regiões críticas nomeadas exigem que o número de "categorias" de 
+exclusão mútua seja conhecido em tempo de compilação; um vetor de 
+locks explícitos, por poder ser alocado e indexado dinamicamente, 
+é a ferramenta que preserva tanto a corretude quanto o paralelismo 
+quando esse número, $M$, só é definido pelo usuário na hora da execução.
+
+\section{Conclusão}
+
+Os resultados obtidos confirmam que ambas as estratégias de sincronização -- regiões críticas nomeadas para um número fixo e pequeno de listas, e locks explícitos para um número $M$ definido em tempo de execução -- garantem a integridade das listas encadeadas durante inserções concorrentes, sem perda ou duplicação de elementos em nenhuma das execuções testadas. As oscilações observadas na distribuição de elementos entre as listas, mais acentuadas para valores pequenos de $N$ e maiores de $M$, são explicadas pela variância estatística natural do sorteio aleatório e diminuem à medida que $N$ cresce, sem qualquer relação com falhas de sincronização.
+
+Do ponto de vista de projeto, a comparação reforça que regiões críticas nomeadas são adequadas apenas quando o número de categorias de exclusão mútua é conhecido em tempo de compilação; quando esse número é definido dinamicamente pelo usuário, como no caso de \texttt{n\_listas.c}, o uso de locks explícitos organizados em um vetor é a alternativa que preserva tanto a corretude quanto o paralelismo entre listas distintas.
+
+\newpage
+
+\appendix
+\section{Código-Fonte}
+
+\subsection{duas\_listas.c}
+\lstinputlisting[style=cstyle, caption={Programa com duas listas e regiões críticas nomeadas}, label={lst:duas}]{../src/duas_listas.c}
+
+\subsection{n\_listas.c}
+\lstinputlisting[style=cstyle, caption={Programa generalizado para $M$ listas com locks explícitos}, label={lst:n}]{../src/n_listas.c}
+
+\end{document}
