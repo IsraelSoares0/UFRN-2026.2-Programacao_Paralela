@@ -1,0 +1,455 @@
+\documentclass[a4paper,12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{float}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black}
+
+\renewcommand{\tablename}{Tabela}
+\renewcommand{\lstlistingname}{Código}
+
+
+
+% ---------- Configuração do realce de sintaxe (C) ----------
+
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codecomment}{RGB}{0,128,0}
+\definecolor{codestring}{RGB}{163,21,21}
+\definecolor{framecolor}{RGB}{200,200,200}
+
+\lstdefinestyle{cstyle}{
+    language=C,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecomment}\itshape,
+    stringstyle=\color{codestring},
+    numberstyle=\tiny\color{gray},
+    numbers=left,
+    numbersep=6pt,
+    frame=single,
+    rulecolor=\color{framecolor},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    columns=flexible,
+    morekeywords={size_t},
+    extendedchars=true,
+    literate=
+        {á}{{\'a}}1 {à}{{\`a}}1 {â}{{\^a}}1 {ã}{{\~a}}1
+        {é}{{\'e}}1 {ê}{{\^e}}1 {í}{{\'i}}1
+        {ó}{{\'o}}1 {ô}{{\^o}}1 {õ}{{\~o}}1
+        {ú}{{\'u}}1 {ü}{{\"u}}1 {ç}{{\c c}}1
+        {Á}{{\'A}}1 {À}{{\`A}}1 {Â}{{\^A}}1 {Ã}{{\~A}}1
+        {É}{{\'E}}1 {Ê}{{\^E}}1 {Í}{{\'I}}1
+        {Ó}{{\'O}}1 {Ô}{{\^O}}1 {Õ}{{\~O}}1
+        {Ú}{{\'U}}1 {Ü}{{\"U}}1 {Ç}{{\c C}}1
+}
+
+
+
+\title{Tarefa 10 -- Mecanismos de Sincronização com OpenMP}
+\author{Israel Soares de Castro Filho \\ Matrícula: 20250070780}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Introdução}
+
+Este relatório documenta a Tarefa 10, cujo objetivo é estudar, de forma
+prática, os principais mecanismos de sincronização disponíveis no
+OpenMP para proteger uma variável compartilhada em regiões paralelas.
+Como estudo de caso, mantém-se o problema já utilizado na Tarefa~8:
+a estimativa estocástica de $\pi$ pelo método de Monte Carlo, no qual
+cada thread sorteia pontos $(x,y)$ no quadrado $[0,1]\times[0,1]$ e
+conta quantos caem dentro do quarto de círculo de raio unitário. A
+razão entre acertos e total de pontos, multiplicada por 4, converge
+para $\pi$.
+
+O foco desta tarefa não é a precisão da estimativa em si, mas sim
+\textbf{como} a contagem de acertos é somada entre as threads e o
+impacto disso no tempo de execução. Foram implementadas e comparadas
+cinco versões do estimador, variando a forma de acumulação do
+contador de acertos e o mecanismo de exclusão mútua utilizado.
+
+\section{Metodologia}
+
+A partir do código de referência da Tarefa 8, foram implementadas
+5 versões da função de estimativa de $\pi$, todas paralelizadas com
+\texttt{\#pragma omp parallel} e \texttt{\#pragma omp for}, variando
+apenas a estratégia de acumulação do contador de acertos:
+
+\begin{itemize}
+    \item \textbf{V1 -- privado + \texttt{rand()} + critical}: cada
+    thread mantém um contador local (\texttt{acertos\_local}) e soma
+    seu valor à variável global apenas \textbf{uma vez}, ao final da
+    região paralela, dentro de uma seção \texttt{\#pragma omp critical}.
+    Utiliza o gerador \texttt{rand()} da biblioteca padrão (não
+    thread-safe, herdado da Tarefa 8 como baseline de referência).
+
+    \item \textbf{V2 -- privado + xorshift32 + critical}: idêntico a
+    V1 na estratégia de sincronização (contador privado, um único
+    \texttt{critical} por thread ao final), mas usando o gerador
+    Xorshift32 com estado privado por thread em vez de \texttt{rand()}.
+
+    \item \textbf{V3 -- compartilhado + xorshift32 + critical}: o
+    contador de acertos é uma única variável \textbf{compartilhada},
+    incrementada dentro de uma seção \texttt{\#pragma omp critical} a
+    \textbf{cada acerto} (isto é, potencialmente milhões de entradas na
+    seção crítica, e não apenas uma por thread).
+
+    \item \textbf{V4 -- compartilhado + xorshift32 + atomic}: mesma
+    estrutura de V3 (contador compartilhado, atualizado a cada acerto),
+    trocando a diretiva \texttt{critical} pela diretiva
+    \texttt{\#pragma omp atomic}.
+
+    \item \textbf{V5 -- xorshift32 + reduction}: nenhuma diretiva de
+    exclusão mútua é escrita manualmente; o acúmulo é delegado à
+    cláusula \texttt{reduction(+:total\_acertos)} do próprio
+    \texttt{\#pragma omp for}, que cria cópias privadas do contador
+    para cada thread e as combina automaticamente ao final do laço.
+\end{itemize}
+
+\textbf{Observação sobre o gerador aleatório.} O enunciado original
+da tarefa pedia o uso de \texttt{rand\_r()} (gerador thread-safe do
+padrão POSIX) nas versões com contador compartilhado (V3 e V4).
+Como o ambiente de desenvolvimento e testes utilizado é o Windows,
+onde \texttt{rand\_r()} não está disponível de forma padronizada, essa
+chamada foi substituída pela função \texttt{random\_double()}, baseada
+no gerador Xorshift32 com estado (\texttt{seed}) privado por thread --
+a mesma estratégia já adotada na Tarefa 8 para contornar a mesma
+limitação. Do ponto de vista do experimento, essa troca não compromete
+a análise: o objetivo da tarefa é comparar o \textbf{custo dos
+mecanismos de sincronização} (critical, atomic, reduction), e não o
+gerador de números aleatórios em si; usar o mesmo gerador
+(Xorshift32) em V2, V3, V4 e V5 tem inclusive a vantagem de isolar
+melhor essa variável, deixando a diferença de desempenho atribuível
+quase exclusivamente à estratégia de sincronização escolhida.
+
+Todas as versões foram executadas para o mesmo conjunto de tamanhos de
+entrada ($n\_pontos \in \{10^4, 10^5, 10^6, 10^7, 10^8, 10^9\}$), com
+20 threads, medindo o tempo de execução com \texttt{omp\_get\_wtime()}
+e o erro absoluto/relativo em relação a $\pi$ real. O código-fonte
+completo encontra-se em \texttt{../src/tarefa10.c} e é reproduzido no
+Apêndice~A.
+
+\section{Resultados}
+
+A Tabela~\ref{tab:resultados} reproduz a saída obtida na execução do
+programa (arquivo \texttt{output.txt}), com $\pi_{real} = 3.141592653589793$
+e 20 threads.
+
+\begin{table}[H]
+\centering
+
+\begin{tabular}{lccc}
+\toprule
+\textbf{N\_PONTOS} & \textbf{Versão} & \textbf{$\pi$ medido} & \textbf{Tempo (s)} \\
+\midrule
+
+10.000          & V1 & 3,11920000 & 0,0000 \\
+10.000          & V2 & 3,14320000 & 0,0000 \\
+10.000          & V3 & 3,14320000 & 0,0010 \\
+10.000          & V4 & 3,14320000 & 0,0000 \\
+10.000          & V5 & 3,14320000 & 0,0000 \\
+\midrule
+
+100.000         & V1 & 3,10040000 & 0,0010 \\
+100.000         & V2 & 3,14408000 & 0,0000 \\
+100.000         & V3 & 3,14408000 & 0,0040 \\
+100.000         & V4 & 3,14408000 & 0,0030 \\
+100.000         & V5 & 3,14408000 & 0,0000 \\
+\midrule
+
+1.000.000       & V1 & 3,13557200 & 0,0030 \\
+1.000.000       & V2 & 3,14235200 & 0,0000 \\
+1.000.000       & V3 & 3,14235200 & 0,0390 \\
+1.000.000       & V4 & 3,14235200 & 0,0120 \\
+1.000.000       & V5 & 3,14235200 & 0,0000 \\
+\midrule
+
+10.000.000      & V1 & 3,14204040 & 0,0090 \\
+10.000.000      & V2 & 3,14160360 & 0,0020 \\
+10.000.000      & V3 & 3,14160360 & 0,3640 \\
+10.000.000      & V4 & 3,14160360 & 0,1210 \\
+10.000.000      & V5 & 3,14160360 & 0,0020 \\
+\midrule
+
+100.000.000     & V1 & 3,14124624 & 0,0910 \\
+100.000.000     & V2 & 3,14187084 & 0,0210 \\
+100.000.000     & V3 & 3,14187084 & 3,7180 \\
+100.000.000     & V4 & 3,14155864 & 1,1660 \\
+100.000.000     & V5 & 3,14169476 & 0,0220 \\
+\midrule
+
+1.000.000.000   & V1 & 3,14137154 & 0,9300 \\
+1.000.000.000   & V2 & 3,14161538 & 0,2110 \\
+1.000.000.000   & V3 & 3,14161538 & 38,6540 \\
+1.000.000.000   & V4 & 3,14157180 & 11,8630 \\
+1.000.000.000   & V5 & 3,14160934 & 0,2110 \\
+
+\bottomrule
+\end{tabular}
+\caption{Comparação de $\pi$ medido e tempo de execução entre as 5 versões, para 20 threads (extraído de \texttt{output.txt}).}
+\label{tab:resultados}
+\end{table}
+
+Para facilitar a leitura, a Tabela~\ref{tab:speedup} isola o caso de
+maior carga ($n\_pontos = 10^9$), tomando como referência a versão
+mais lenta (V3, compartilhado + critical).
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrr}
+\toprule
+\textbf{Versão} & \textbf{Tempo (s)} & \textbf{Speedup em relação a V3} \\
+\midrule
+V3 -- compartilhado + critical & 38,6540 & 1,0$\times$ (referência) \\
+V4 -- compartilhado + atomic   & 11,8630 & $\approx$ 3,3$\times$ \\
+V1 -- privado + critical (rand) & 0,9300  & $\approx$ 41,6$\times$ \\
+V2 -- privado + critical (xorshift) & 0,2110 & $\approx$ 183,2$\times$ \\
+V5 -- reduction                & 0,2110  & $\approx$ 183,2$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Comparação de tempo para $n\_pontos = 1.000.000.000$.}
+\label{tab:speedup}
+\end{table}
+
+\section{Análise}
+
+\subsection{Comparação entre as cinco versões}
+
+Os resultados da Tabela~\ref{tab:resultados} deixam claro que o erro
+de estimativa (absoluto e relativo) é, como esperado, praticamente
+idêntico entre V2, V3, V4 e V5 para um mesmo $n\_pontos$ -- afinal,
+todas usam o mesmo gerador (Xorshift32) e a mesma quantidade de
+pontos sorteados; pequenas diferenças de $\pi$ medido entre elas
+(visíveis a partir de $n\_pontos=10^8$) vêm apenas da ordem de
+acumulação das somas parciais em ponto flutuante/inteiro combinada
+com a forma como as sementes de cada thread são geradas, e não da
+qualidade do mecanismo de sincronização. V1 se destaca com erro maior
+porque usa \texttt{rand()}, que tem baixa qualidade estatística e,
+principalmente, não é thread-safe quando chamado concorrentemente
+por várias threads sem proteção -- o que já era uma limitação
+conhecida herdada da Tarefa 8.
+
+O ponto central da tarefa, porém, é o \textbf{tempo de execução}, e
+aí as diferenças são drásticas:
+
+\begin{itemize}
+    \item \textbf{V3 (compartilhado + critical) é, de longe, a pior
+    versão.} Para $n\_pontos=10^9$ ela leva 38,65\,s, contra 0,21\,s
+    de V2/V5 -- quase 200 vezes mais lenta. Isso acontece porque a
+    seção crítica é disputada por até 20 threads \textbf{a cada
+    acerto} (cerca de 78,5\% dos pontos sorteados caem dentro do
+    círculo), e não apenas uma vez por thread. Cada entrada em
+    \texttt{critical} envolve a aquisição de um mutex genérico, o
+    que serializa fortemente as threads e faz o custo de
+    sincronização dominar completamente o tempo total.
+
+    \item \textbf{V4 (compartilhado + atomic) melhora bastante em
+    relação a V3} (11,86\,s vs. 38,65\,s, um ganho de ~3,3$\times$),
+    pois a diretiva \texttt{atomic} usa uma instrução atômica de
+    hardware em vez de um
+    mutex de propósito geral, com overhead bem menor para uma
+    operação simples como \texttt{total\_acertos++}. Ainda assim, é
+    muito mais lenta que as versões com contador privado, pois a
+    variável continua sendo compartilhada e disputada a cada
+    incremento, gerando contenção na mesma linha de cache
+    (\emph{true sharing}) entre todas as threads.
+
+    \item \textbf{V1 e V2 (contador privado + critical apenas ao
+    final)} têm desempenho ordens de magnitude melhor que V3/V4,
+    porque a seção crítica é executada apenas $O(\text{nº de
+    threads})$ vezes (uma soma por thread ao final da região
+    paralela), e não $O(n\_pontos)$ vezes. Isso confirma que o
+    problema de V3/V4 não é o uso de \texttt{critical}/\texttt{atomic}
+    em si, mas a \textbf{frequência} com que a sincronização é
+    acionada.
+
+    \item \textbf{V5 (reduction) tem desempenho equivalente ao melhor
+    caso manual (V2)}, sem que o programador precise escrever
+    nenhuma sincronização explícita. O compilador implementa a
+    redução criando cópias privadas do contador por thread (evitando
+    qualquer disputa durante o laço) e combinando-as ao final, de
+    forma tipicamente mais eficiente ou pelo menos equivalente à
+    melhor estratégia manual.
+\end{itemize}
+
+Em suma, a ordem de desempenho observada foi:
+$$\text{V3 (critical/iteração)} \ll \text{V4 (atomic/iteração)} \ll \text{V1} \approx \text{V2} \approx \text{V5 (reduction)}.$$
+
+\subsection{Reflexão: aplicabilidade em desempenho e produtividade}
+
+Os mecanismos de sincronização do OpenMP não são substitutos
+equivalentes entre si -- cada um representa um compromisso diferente
+entre \textbf{desempenho}, \textbf{generalidade} e
+\textbf{produtividade/simplicidade do código}:
+
+\begin{itemize}
+    \item \texttt{reduction} é o mecanismo de \textbf{maior
+    produtividade e, para o caso testado, também de melhor
+    desempenho}: o programador não escreve nenhum código de
+    sincronização, elimina uma classe inteira de bugs (condições de
+    corrida, esquecimento de proteger uma variável, deadlocks) e
+    delega ao compilador/runtime a escolha da melhor estratégia de
+    combinação. A limitação é o escopo: só se aplica a operações de
+    redução suportadas pela cláusula (soma, produto, mínimo, máximo,
+    operadores lógicos/bit a bit sobre variáveis escalares), não
+    servendo para proteger estruturas de dados complexas ou lógica
+    condicional arbitrária.
+
+    \item \texttt{atomic} é indicado quando a operação protegida é
+    \textbf{uma única instrução simples} sobre uma variável escalar
+    (incremento, soma, subtração, min/max, etc.). Tem
+    overhead menor que \texttt{critical} porque usa instruções
+    atômicas de hardware, mas ainda paga o preço da disputa pela
+    mesma linha de cache quando muitas threads o atualizam
+    simultaneamente com alta frequência (como ficou evidente em V4).
+
+    \item \texttt{critical} (anônima) é o mecanismo mais
+    \textbf{genérico e de maior overhead}: protege blocos de código
+    arbitrários, com múltiplas instruções, variáveis ou até chamadas
+    de função, mas paga o custo de um mutex de propósito geral e,
+    pior, \textbf{todas} as regiões críticas anônimas do programa
+    compartilham implicitamente o mesmo lock global -- ou seja, uma
+    seção crítica não relacionada a outra ainda pode bloqueá-la
+    desnecessariamente. Deve ser reservado para blocos que realmente
+    não podem ser expressos como \texttt{atomic}/\texttt{reduction}, e
+    sempre \textbf{minimizando a frequência de entrada} (idealmente
+    acumulando em variáveis privadas e entrando na seção crítica uma
+    única vez por thread, como nas versões V1/V2, e nunca dentro do
+    laço principal, como em V3).
+
+    \item \texttt{critical} \textbf{nomeada}
+    (\texttt{\#pragma omp critical(nome)}) resolve exatamente a
+    limitação do lock global único: quando existem \textbf{duas ou
+    mais seções críticas protegendo dados independentes} (por
+    exemplo, um contador de acertos e, separadamente, um log de
+    erros ou um acumulador de estatísticas), nomear cada seção
+    crítica permite que threads em seções com nomes diferentes
+    executem \textbf{concorrentemente}, em vez de serem serializadas
+    por um lock global que não tem relação com o dado que estão
+    protegendo. Deve ser usada sempre que houver múltiplas regiões
+    críticas logicamente independentes coexistindo no mesmo programa.
+
+    \item \textbf{Locks explícitos} são a opção de \textbf{menor
+    produtividade, porém maior controle}: úteis quando a granularidade
+    da proteção precisa ser definida dinamicamente em tempo de
+    execução (por exemplo, um vetor de locks, um por posição/bucket
+    de uma tabela hash, permitindo que threads acessando posições
+    diferentes não se bloqueiem entre si), quando é necessário tentar
+    adquirir a proteção sem bloquear (\texttt{omp\_test\_lock}), ou
+    quando o lock precisa ser mantido por mais tempo do que o
+    permitido de forma limpa por um bloco \texttt{critical}/\texttt{atomic}
+    (por exemplo, atravessando chamadas de função). O custo é a
+    responsabilidade adicional do programador: inicializar e destruir
+    corretamente cada lock, e evitar deadlocks ao usar múltiplos locks
+    simultaneamente.
+\end{itemize}
+
+\subsection{Roteiro proposto para escolha do mecanismo}
+
+Com base nos resultados obtidos e na discussão acima, propõe-se o
+seguinte roteiro de decisão, a ser percorrido nesta ordem:
+
+\begin{enumerate}
+    \item \textbf{A operação é uma redução simples sobre uma
+    variável escalar} (soma, produto, mínimo, máximo, and/or/xor)?
+    \\ $\rightarrow$ use \texttt{reduction}. É a opção mais rápida e
+    mais segura, e deve ser sempre a primeira escolha quando aplicável.
+
+    \item \textbf{A operação protegida envolve múltiplas variáveis,
+    uma estrutura de dados, ou lógica condicional não redutível a uma
+    única instrução} (por exemplo, atualizar uma \texttt{struct}, uma
+    lista encadeada ou um vetor de tamanho variável)? \\
+    $\rightarrow$ use \texttt{critical}, mas \textbf{minimize sua
+    frequência de entrada}: sempre que possível, acumule os
+    resultados em uma variável/estrutura privada por thread durante o
+    laço e entre na seção crítica apenas uma vez, ao final da região
+    paralela (como em V1/V2), nunca a cada iteração (como em V3).
+
+    \item \textbf{Existem duas ou mais seções críticas protegendo
+    dados independentes no mesmo programa}? \\
+    $\rightarrow$ nomeie cada uma com
+    \texttt{\#pragma omp critical(nome)}, para que a disputa por uma
+    delas não bloqueie threads que precisam apenas da outra.
+
+    \item \textbf{A operação é uma única instrução simples sobre um
+    único escalar} (incremento, soma, min/max) e, por algum motivo,
+    não se encaixa em \texttt{reduction} (ex.: a variável também é
+    lida/usada de outras formas dentro da região paralela)? \\
+    $\rightarrow$ prefira \texttt{atomic} a \texttt{critical}: mesmo
+    semântica de exclusão mútua, porém com overhead bem menor por
+    usar instruções atômicas de hardware.
+
+    \item \textbf{É necessário controle fino sobre a proteção}? \\
+    $\rightarrow$ use \textbf{locks explícitos}
+    (\texttt{omp\_lock\_t}), aceitando o custo adicional de
+    gerenciá-los corretamente em troca da flexibilidade que nenhum
+    dos mecanismos anteriores oferece.
+\end{enumerate}
+
+De forma resumida: a \textbf{produtividade} decresce e a
+\textbf{complexidade de uso} cresce na ordem
+$$\texttt{reduction} \;\rightarrow\; \texttt{critical (uso disciplinado)} \;\rightarrow\;$$
+$$\texttt{atomic} \;\rightarrow\; \texttt{critical nomeada} \;\rightarrow\; \texttt{locks explícitos}$$
+
+Enquanto o \textbf{desempenho}, para o caso de agregar um contador
+escalar como o deste experimento, tende a seguir a ordem inversa até
+certo ponto: \texttt{reduction} e contador privado com
+\texttt{critical} ao final empatam como melhores opções, seguidos por
+\texttt{atomic} por iteração e, por último, \texttt{critical} por
+iteração -- confirmado empiricamente pela diferença de quase 200
+vezes entre V3 e V5 para $n\_pontos = 10^9$.
+
+\section{Conclusão}
+
+O experimento confirmou, de forma quantitativa, uma regra prática
+importante em programação paralela com OpenMP: \textbf{o mecanismo de
+sincronização escolhido importa menos do que a frequência com que ele
+é acionado}. Um \texttt{critical} usado uma vez por thread (V1/V2) é
+ordens de magnitude mais rápido que o mesmo \texttt{critical} usado a
+cada iteração de um laço com centenas de milhões de iterações (V3),
+mesmo protegendo exatamente a mesma informação. Trocar
+\texttt{critical} por \texttt{atomic} reduz o dano quando a
+sincronização por iteração é inevitável, mas não elimina a contenção
+gerada por uma variável compartilhada disputada por muitas threads.
+
+A cláusula \texttt{reduction}, quando aplicável, é a melhor escolha
+tanto em desempenho quanto em produtividade, pois evita completamente
+a necessidade de o programador implementar manualmente a
+acumulação privada e a combinação final -- e, neste experimento,
+igualou o desempenho da melhor implementação manual (V2) sem exigir
+nenhuma linha de código de sincronização. Mecanismos mais
+flexíveis, como \texttt{critical} nomeada e locks explícitos, seguem
+sendo ferramentas importantes para os casos em que \texttt{reduction}
+e \texttt{atomic} não se aplicam, mas devem ser reservados para essas
+situações específicas, e não usados por padrão quando alternativas
+mais simples e eficientes estão disponíveis.
+
+\newpage
+
+\appendix
+\section{Código-Fonte}
+
+O código completo utilizado nesta tarefa está localizado em
+\texttt{../src/tarefa10.c} e é reproduzido a seguir.
+
+\lstinputlisting[style=cstyle, caption={Código-fonte completo -- \texttt{tarefa10.c}}, label={lst:tarefa10}]{../src/tarefa10.c}
+
+\end{document}
