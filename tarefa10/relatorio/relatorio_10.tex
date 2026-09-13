@@ -233,189 +233,110 @@ V5 -- reduction                & 0,2110  & $\approx$ 183,2$\times$ \\
 
 \subsection{Comparação entre as cinco versões}
 
-Os resultados da Tabela~\ref{tab:resultados} deixam claro que o erro
-de estimativa (absoluto e relativo) é, como esperado, praticamente
-idêntico entre V2, V3, V4 e V5 para um mesmo $n\_pontos$ -- afinal,
-todas usam o mesmo gerador (Xorshift32) e a mesma quantidade de
-pontos sorteados; pequenas diferenças de $\pi$ medido entre elas
-(visíveis a partir de $n\_pontos=10^8$) vêm apenas da ordem de
-acumulação das somas parciais em ponto flutuante/inteiro combinada
-com a forma como as sementes de cada thread são geradas, e não da
-qualidade do mecanismo de sincronização. V1 se destaca com erro maior
-porque usa \texttt{rand()}, que tem baixa qualidade estatística e,
-principalmente, não é thread-safe quando chamado concorrentemente
-por várias threads sem proteção -- o que já era uma limitação
-conhecida herdada da Tarefa 8.
+O erro de estimativa de $\pi$ foi praticamente o mesmo em V2, V3, V4
+e V5, já que todas usam o mesmo gerador de números aleatórios
+(Xorshift32) e a mesma quantidade de pontos. Pequenas diferenças
+entre elas vêm apenas da ordem em que as somas são feitas, não da
+qualidade da sincronização. Já a V1 teve erro maior por usar
+\texttt{rand()}, que não é thread-safe e tem qualidade estatística
+inferior -- limitação já conhecida da Tarefa 8.
 
-O ponto central da tarefa, porém, é o \textbf{tempo de execução}, e
-aí as diferenças são drásticas:
+O que realmente diferencia as versões é o \textbf{tempo de
+execução}:
 
 \begin{itemize}
-    \item \textbf{V3 (compartilhado + critical) é, de longe, a pior
-    versão.} Para $n\_pontos=10^9$ ela leva 38,65\,s, contra 0,21\,s
-    de V2/V5 -- quase 200 vezes mais lenta. Isso acontece porque a
-    seção crítica é disputada por até 20 threads \textbf{a cada
-    acerto} (cerca de 78,5\% dos pontos sorteados caem dentro do
-    círculo), e não apenas uma vez por thread. Cada entrada em
-    \texttt{critical} envolve a aquisição de um mutex genérico, o
-    que serializa fortemente as threads e faz o custo de
-    sincronização dominar completamente o tempo total.
+    \item \textbf{V3 (contador compartilhado + critical)} foi, de
+    longe, a pior: 38,65\,s contra 0,21\,s de V2/V5 para
+    $n\_pontos=10^9$ -- quase 200 vezes mais lenta. Isso acontece
+    porque a seção crítica é disputada por todas as threads a
+    \textbf{cada acerto} (cerca de 78,5\% dos pontos), e não apenas
+    uma vez por thread.
 
-    \item \textbf{V4 (compartilhado + atomic) melhora bastante em
-    relação a V3} (11,86\,s vs. 38,65\,s, um ganho de ~3,3$\times$),
-    pois a diretiva \texttt{atomic} usa uma instrução atômica de
-    hardware em vez de um
-    mutex de propósito geral, com overhead bem menor para uma
-    operação simples como \texttt{total\_acertos++}. Ainda assim, é
-    muito mais lenta que as versões com contador privado, pois a
-    variável continua sendo compartilhada e disputada a cada
-    incremento, gerando contenção na mesma linha de cache
-    (\emph{true sharing}) entre todas as threads.
+    \item \textbf{V4 (compartilhado + atomic)} melhora bastante em
+    relação a V3 (11,86\,s, ganho de $\approx$3,3$\times$), pois
+    \texttt{atomic} usa uma instrução de hardware, mais leve que um
+    mutex genérico. Ainda assim é bem mais lenta que as versões com
+    contador privado, porque a variável continua sendo disputada a
+    cada incremento.
 
-    \item \textbf{V1 e V2 (contador privado + critical apenas ao
-    final)} têm desempenho ordens de magnitude melhor que V3/V4,
-    porque a seção crítica é executada apenas $O(\text{nº de
-    threads})$ vezes (uma soma por thread ao final da região
-    paralela), e não $O(n\_pontos)$ vezes. Isso confirma que o
-    problema de V3/V4 não é o uso de \texttt{critical}/\texttt{atomic}
-    em si, mas a \textbf{frequência} com que a sincronização é
-    acionada.
+    \item \textbf{V1 e V2 (contador privado, critical só no final)}
+    são ordens de magnitude mais rápidas que V3/V4, pois a seção
+    crítica é usada apenas uma vez por thread, e não uma vez por
+    ponto sorteado. Isso mostra que o problema não é o mecanismo em
+    si, mas a \textbf{frequência} com que ele é acionado.
 
-    \item \textbf{V5 (reduction) tem desempenho equivalente ao melhor
-    caso manual (V2)}, sem que o programador precise escrever
-    nenhuma sincronização explícita. O compilador implementa a
-    redução criando cópias privadas do contador por thread (evitando
-    qualquer disputa durante o laço) e combinando-as ao final, de
-    forma tipicamente mais eficiente ou pelo menos equivalente à
-    melhor estratégia manual.
+    \item \textbf{V5 (reduction)} tem desempenho igual ao melhor caso
+    manual (V2), sem que o programador escreva nenhuma sincronização:
+    o compilador já cria cópias privadas do contador e as combina ao
+    final.
 \end{itemize}
 
-Em suma, a ordem de desempenho observada foi:
+Ou seja, a ordem de desempenho observada foi:
 $$\text{V3 (critical/iteração)} \ll \text{V4 (atomic/iteração)} \ll \text{V1} \approx \text{V2} \approx \text{V5 (reduction)}.$$
 
-\subsection{Reflexão: aplicabilidade em desempenho e produtividade}
+\subsection{Quando usar cada mecanismo}
 
-Os mecanismos de sincronização do OpenMP não são substitutos
-equivalentes entre si -- cada um representa um compromisso diferente
-entre \textbf{desempenho}, \textbf{generalidade} e
-\textbf{produtividade/simplicidade do código}:
+Cada mecanismo do OpenMP equilibra de forma diferente
+\textbf{desempenho}, \textbf{generalidade} e \textbf{facilidade de
+uso}:
 
 \begin{itemize}
-    \item \texttt{reduction} é o mecanismo de \textbf{maior
-    produtividade e, para o caso testado, também de melhor
-    desempenho}: o programador não escreve nenhum código de
-    sincronização, elimina uma classe inteira de bugs (condições de
-    corrida, esquecimento de proteger uma variável, deadlocks) e
-    delega ao compilador/runtime a escolha da melhor estratégia de
-    combinação. A limitação é o escopo: só se aplica a operações de
-    redução suportadas pela cláusula (soma, produto, mínimo, máximo,
-    operadores lógicos/bit a bit sobre variáveis escalares), não
-    servendo para proteger estruturas de dados complexas ou lógica
-    condicional arbitrária.
+    \item \texttt{reduction}: mais simples de usar e, neste teste,
+    também o mais rápido. Só serve para operações simples (soma,
+    produto, mín/máx) sobre variáveis escalares.
 
-    \item \texttt{atomic} é indicado quando a operação protegida é
-    \textbf{uma única instrução simples} sobre uma variável escalar
-    (incremento, soma, subtração, min/max, etc.). Tem
-    overhead menor que \texttt{critical} porque usa instruções
-    atômicas de hardware, mas ainda paga o preço da disputa pela
-    mesma linha de cache quando muitas threads o atualizam
-    simultaneamente com alta frequência (como ficou evidente em V4).
+    \item \texttt{atomic}: bom para uma única operação simples sobre
+    uma variável (como um incremento). Mais rápido que
+    \texttt{critical}, mas ainda sofre disputa quando muitas threads
+    atualizam a mesma variável com frequência (como em V4).
 
-    \item \texttt{critical} (anônima) é o mecanismo mais
-    \textbf{genérico e de maior overhead}: protege blocos de código
-    arbitrários, com múltiplas instruções, variáveis ou até chamadas
-    de função, mas paga o custo de um mutex de propósito geral e,
-    pior, \textbf{todas} as regiões críticas anônimas do programa
-    compartilham implicitamente o mesmo lock global -- ou seja, uma
-    seção crítica não relacionada a outra ainda pode bloqueá-la
-    desnecessariamente. Deve ser reservado para blocos que realmente
-    não podem ser expressos como \texttt{atomic}/\texttt{reduction}, e
-    sempre \textbf{minimizando a frequência de entrada} (idealmente
-    acumulando em variáveis privadas e entrando na seção crítica uma
-    única vez por thread, como nas versões V1/V2, e nunca dentro do
-    laço principal, como em V3).
+    \item \texttt{critical} (anônimo): o mais genérico, protege
+    qualquer bloco de código, mas tem o maior overhead -- e todas as
+    seções críticas anônimas do programa compartilham o mesmo lock.
+    Deve ser usado o mínimo possível, de preferência uma vez por
+    thread (como em V1/V2), nunca dentro do laço principal (como em
+    V3).
 
-    \item \texttt{critical} \textbf{nomeada}
-    (\texttt{\#pragma omp critical(nome)}) resolve exatamente a
-    limitação do lock global único: quando existem \textbf{duas ou
-    mais seções críticas protegendo dados independentes} (por
-    exemplo, um contador de acertos e, separadamente, um log de
-    erros ou um acumulador de estatísticas), nomear cada seção
-    crítica permite que threads em seções com nomes diferentes
-    executem \textbf{concorrentemente}, em vez de serem serializadas
-    por um lock global que não tem relação com o dado que estão
-    protegendo. Deve ser usada sempre que houver múltiplas regiões
-    críticas logicamente independentes coexistindo no mesmo programa.
+    \item \texttt{critical} nomeada: resolve o problema do lock único
+    quando existem duas ou mais seções críticas protegendo dados
+    diferentes, permitindo que rodem em paralelo.
 
-    \item \textbf{Locks explícitos} são a opção de \textbf{menor
-    produtividade, porém maior controle}: úteis quando a granularidade
-    da proteção precisa ser definida dinamicamente em tempo de
-    execução (por exemplo, um vetor de locks, um por posição/bucket
-    de uma tabela hash, permitindo que threads acessando posições
-    diferentes não se bloqueiem entre si), quando é necessário tentar
-    adquirir a proteção sem bloquear (\texttt{omp\_test\_lock}), ou
-    quando o lock precisa ser mantido por mais tempo do que o
-    permitido de forma limpa por um bloco \texttt{critical}/\texttt{atomic}
-    (por exemplo, atravessando chamadas de função). O custo é a
-    responsabilidade adicional do programador: inicializar e destruir
-    corretamente cada lock, e evitar deadlocks ao usar múltiplos locks
-    simultaneamente.
+    \item \textbf{Locks explícitos}: dão mais controle (ex.: um lock
+    por posição de uma tabela), mas exigem que o programador
+    gerencie tudo manualmente, com risco de deadlock.
 \end{itemize}
 
-\subsection{Roteiro proposto para escolha do mecanismo}
-
-Com base nos resultados obtidos e na discussão acima, propõe-se o
-seguinte roteiro de decisão, a ser percorrido nesta ordem:
+\subsection{Roteiro para escolher o mecanismo}
 
 \begin{enumerate}
-    \item \textbf{A operação é uma redução simples sobre uma
-    variável escalar} (soma, produto, mínimo, máximo, and/or/xor)?
-    \\ $\rightarrow$ use \texttt{reduction}. É a opção mais rápida e
-    mais segura, e deve ser sempre a primeira escolha quando aplicável.
-
-    \item \textbf{A operação protegida envolve múltiplas variáveis,
-    uma estrutura de dados, ou lógica condicional não redutível a uma
-    única instrução} (por exemplo, atualizar uma \texttt{struct}, uma
-    lista encadeada ou um vetor de tamanho variável)? \\
-    $\rightarrow$ use \texttt{critical}, mas \textbf{minimize sua
-    frequência de entrada}: sempre que possível, acumule os
-    resultados em uma variável/estrutura privada por thread durante o
-    laço e entre na seção crítica apenas uma vez, ao final da região
-    paralela (como em V1/V2), nunca a cada iteração (como em V3).
-
-    \item \textbf{Existem duas ou mais seções críticas protegendo
-    dados independentes no mesmo programa}? \\
-    $\rightarrow$ nomeie cada uma com
-    \texttt{\#pragma omp critical(nome)}, para que a disputa por uma
-    delas não bloqueie threads que precisam apenas da outra.
-
-    \item \textbf{A operação é uma única instrução simples sobre um
-    único escalar} (incremento, soma, min/max) e, por algum motivo,
-    não se encaixa em \texttt{reduction} (ex.: a variável também é
-    lida/usada de outras formas dentro da região paralela)? \\
-    $\rightarrow$ prefira \texttt{atomic} a \texttt{critical}: mesmo
-    semântica de exclusão mútua, porém com overhead bem menor por
-    usar instruções atômicas de hardware.
-
-    \item \textbf{É necessário controle fino sobre a proteção}? \\
-    $\rightarrow$ use \textbf{locks explícitos}
-    (\texttt{omp\_lock\_t}), aceitando o custo adicional de
-    gerenciá-los corretamente em troca da flexibilidade que nenhum
-    dos mecanismos anteriores oferece.
+    \item É uma redução simples (soma, produto, mín/máx)? Use
+    \texttt{reduction}.
+    \item Envolve várias variáveis ou uma estrutura de dados? Use
+    \texttt{critical}, mas acumule em variável privada e entre na
+    seção crítica só uma vez por thread.
+    \item Há mais de uma seção crítica protegendo dados
+    independentes? Nomeie cada uma.
+    \item É uma única operação simples que não cabe em
+    \texttt{reduction}? Prefira \texttt{atomic}.
+    \item Precisa de controle fino? Use locks explícitos.
 \end{enumerate}
 
-De forma resumida: a \textbf{produtividade} decresce e a
-\textbf{complexidade de uso} cresce na ordem
-$$\texttt{reduction} \;\rightarrow\; \texttt{critical (uso disciplinado)} \;\rightarrow\;$$
-$$\texttt{atomic} \;\rightarrow\; \texttt{critical nomeada} \;\rightarrow\; \texttt{locks explícitos}$$
+Em resumo: a \textbf{produtividade} cai e a \textbf{complexidade}
+cresce nesta ordem: 
 
-Enquanto o \textbf{desempenho}, para o caso de agregar um contador
-escalar como o deste experimento, tende a seguir a ordem inversa até
-certo ponto: \texttt{reduction} e contador privado com
-\texttt{critical} ao final empatam como melhores opções, seguidos por
-\texttt{atomic} por iteração e, por último, \texttt{critical} por
-iteração -- confirmado empiricamente pela diferença de quase 200
-vezes entre V3 e V5 para $n\_pontos = 10^9$.
+\begin{center}
+    \texttt{reduction} $\rightarrow$ \texttt{critical} 
+    $\rightarrow$ \texttt{atomic}
+    $\rightarrow$ \texttt{critical} nomeada $\rightarrow$ locks
+    explícitos.
+\end{center}
+
+Já o \textbf{desempenho}, para agregar um contador
+escalar como neste experimento, segue quase a ordem inversa:
+\texttt{reduction} e contador privado empatam como melhores opções,
+seguidos por \texttt{atomic} por iteração e, por último,
+\texttt{critical} por iteração -- confirmado pela diferença de quase
+200 vezes entre V3 e V5.
 
 \section{Conclusão}
 
