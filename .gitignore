@@ -1,3 +1,4 @@
 Modelo/
 *.synctex.gz
 .build/
+*.out
