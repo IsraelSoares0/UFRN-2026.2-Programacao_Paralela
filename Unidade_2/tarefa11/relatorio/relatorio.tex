@@ -3,7 +3,6 @@
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage[portuguese]{babel}
-\usepackage{amsmath}
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{subcaption}
@@ -11,6 +10,7 @@
 \usepackage{xcolor}
 \usepackage{listings}
 \usepackage{pgfplots}
+\usepackage{float}
 \pgfplotsset{compat=1.16}
 \geometry{margin=2.5cm}
 
@@ -54,145 +54,108 @@
 
 \section{Introdução}
 
-Este relatório apresenta a implementação, em linguagem C, de um simulador de
-fluido 2D que resolve a equação de Navier--Stokes considerando \emph{apenas} o
-efeito da viscosidade (sem pressão, sem advecção e sem forças externas):
+A atividade consiste em simular o movimento de um fluido em 2D com a equação de
+Navier--Stokes, considerando apenas a viscosidade (sem pressão e sem forças
+externas), e depois paralelizar o código com OpenMP. O objetivo principal é
+observar como o \textbf{particionamento dos dados} entre as threads e o
+\textbf{balanceamento de carga}, controlados pelas cláusulas \texttt{schedule} e
+\texttt{collapse}, afetam o desempenho. A medição foi feita com o PaScal Suite.
 
-\begin{equation}
-    \frac{\partial \mathbf{u}}{\partial t} = \nu \left(
-    \frac{\partial^2 \mathbf{u}}{\partial x^2} +
-    \frac{\partial^2 \mathbf{u}}{\partial y^2} \right),
-    \qquad \mathbf{u} = (u, v).
-\end{equation}
+\section{Simulação do fluido}
 
-Primeiro, o código sequencial é validado: um fluido parado deve permanecer
-parado, e uma pequena perturbação deve se difundir suavemente, de acordo com a
-solução analítica. Em seguida, o código é paralelizado com OpenMP, e o foco
-passa a ser o impacto das cláusulas \texttt{schedule} e \texttt{collapse} no
-desempenho, avaliado com o PaScal Suite.
-
-\section{Metodologia}
-
-\subsection{Discretização}
-
-O domínio é o quadrado $[0,1]^2$, com malha uniforme de $N \times N$ células e
-contorno periódico nas duas direções. Usa-se diferenças finitas com o esquema
-explícito FTCS e estêncil de cinco pontos:
-
-\begin{equation}
-    u^{n+1}_{i,j} = u^{n}_{i,j} + r\left(u^{n}_{i+1,j} + u^{n}_{i-1,j} +
-    u^{n}_{i,j+1} + u^{n}_{i,j-1} - 4u^{n}_{i,j}\right),
-    \qquad r = \frac{\nu\,\Delta t}{\Delta x^2},
-\end{equation}
-
-e equação análoga para $v$. O método é estável em 2D para $r \le 0{,}25$; o
-código fixa $r = 0{,}2$ e calcula $\Delta t$ a partir dele.
-
-\subsection{Casos de teste}
+O código foi validado antes de ser paralelizado, com dois testes.
 
 \begin{itemize}
-    \item \textbf{Fluido parado} ($u = v = 0$): o campo deve permanecer nulo.
-    \item \textbf{Perturbação gaussiana} em $u$, com $A = 1$ e
-    $\sigma_0 = 0{,}05$, centrada em $(0{,}5;\,0{,}5)$. Para uma gaussiana 2D,
-    a difusão pura tem solução analítica na qual o pico decai como
-    \begin{equation}
-        u_{\max}(t) = \frac{A\,\sigma_0^2}{\sigma_0^2 + 2\nu t}.
-    \end{equation}
+    \item \textbf{Fluido parado}: o campo de velocidade deve continuar nulo.
+    A Figura~\ref{fig:sim0} mostra que isso aconteceu: nos quatro instantes
+    exibidos, o campo é zero em toda a malha.
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=\linewidth]{../ground_truth/simulacao0/difusao_figura.png}
+        \caption{Fluido parado: o campo permanece nulo.}
+        \label{fig:sim0}
+    \end{figure}
+
+    \item \textbf{Perturbação no fluido}: uma região de velocidade mais alta no
+    centro deve se espalhar suavemente. A Figura~\ref{fig:sim1} mostra o pico
+    diminuindo (de 0,994 para 0,200) e a região se alargando, sem oscilações. O
+    resultado numérico acompanha a solução analítica traçada nos gráficos.
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=\linewidth]{../ground_truth/simulacao1/difusao_figura.png}
+        \caption{Difusão da perturbação, comparada com a solução analítica.}
+        \label{fig:sim1}
+    \end{figure}
+
 \end{itemize}
 
-\subsection{Paralelização e experimento de desempenho}
 
-O passo de tempo foi paralelizado em duas versões do mesmo kernel, apresentadas
-no Apêndice~\ref{ap:codigo}:
+Nos dois casos o comportamento foi o esperado, e o código foi considerado
+validado para os testes de desempenho.
+
+\section{Paralelização com OpenMP}
+
+\subsection{Particionamento de dados e balanceamento de carga}
+
+O trabalho do programa é aplicar o mesmo cálculo a cada ponto de uma malha
+$1024 \times 1024$, a cada passo de tempo. Paralelizar significa dividir esses
+pontos entre as threads. Foram avaliadas duas formas de dividir:
 
 \begin{itemize}
-    \item \textbf{\texttt{schedule(static)}}: \texttt{parallel for} apenas no
-    laço externo (\texttt{i}), com escalonamento estático;
-    \item \textbf{\texttt{collapse(2)}}: os laços \texttt{i} e \texttt{j} são
-    fundidos em um espaço de $N^2$ iterações, também com escalonamento estático.
-    Como o \texttt{collapse} exige laços perfeitamente aninhados, o cálculo dos
-    vizinhos periódicos (\texttt{im}, \texttt{ip}) passa para dentro do corpo e é
-    refeito a cada ponto.
+    \item \textbf{\texttt{schedule(static)}}: o laço externo (as linhas da malha)
+    é dividido em blocos contíguos de mesmo tamanho, um por thread, definidos
+    antes da execução. Com 8 threads, cada uma recebe 128 das 1024 linhas.
+    \item \textbf{\texttt{collapse(2)}}: os dois laços (linhas e colunas) são
+    tratados como um único conjunto de $1024^2$ pontos, e esse conjunto é dividido
+    entre as threads, também de forma estática. Com 8 threads, cada uma recebe
+    131.072 pontos.
 \end{itemize}
 
-No experimento de desempenho, a malha foi fixada em $N = 1024$ e o único
-parâmetro de entrada foi o tempo final $t_{final}$. As entradas i1 a i4
-dobram o tempo simulado a cada passo, de modo que o trabalho total também dobra. 
-As execuções foram feitas com o PaScal Analyzer, com instrumentação manual da região do passo
-de tempo, para 1, 2, 4 e 8 cores. O PaScal Viewer calcula o speedup de cada
-versão em relação à \emph{sua própria} execução com 1 core.
+\begin{table}[ht]
+\centering
+\caption{Como cada versão divide o trabalho entre as threads.}
+\label{tab:particao}
+\small
+\begin{tabular}{l p{4.6cm} r r}
+\toprule
+Versão & O que é dividido & Unidades & Por thread (8 threads) \\
+\midrule
+\texttt{schedule(static)} & linhas da malha & 1.024 & 128 linhas \\
+\texttt{collapse(2)} & pontos da malha & 1.048.576 & 131.072 pontos \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\section{Validação do código}
+\paragraph{Balanceamento de carga.} Todos os pontos exigem o mesmo trabalho, e
+1024 é divisível por 2, 4 e 8. Por isso, as duas versões distribuem o trabalho
+de forma igual entre as threads em todas as configurações testadas, e não
+existe desbalanceamento a corrigir. Esse é o cenário em que o escalonamento
+estático é indicado. As políticas \texttt{dynamic} e \texttt{guided}, que
+entregam pedaços de trabalho às threads durante a execução, são úteis quando o
+custo de cada iteração varia, o que não ocorre aqui.
 
-\subsection{Fluido parado}
+\paragraph{O que o \texttt{collapse} muda no código.} Para fundir os laços, o
+cálculo dos vizinhos periódicos das linhas (\texttt{im} e \texttt{ip}) precisou
+ser movido para dentro do laço interno, e passa a ser refeito a cada ponto
+(Apêndice~\ref{ap:codigo}). A versão com \texttt{collapse} divide o trabalho em
+partes menores, mas executa mais instruções por ponto.
 
-A Figura~\ref{fig:sim0} mostra a simulação de um fluido inicialmente parado
-($N = 128$, $\nu = 0{,}05$, até $t = 2$). Nos quatro instantes exibidos o campo
-é uniforme e igual a zero, o perfil central $u(x, y = L/2)$ coincide com $u = 0$
-em todos os tempos e o máximo de $u$ permanece nulo ao longo de toda a
-simulação. Como o laplaciano de um campo nulo é nulo, esse é o resultado
-esperado. O teste indica que o esquema não gera velocidade espúria.
+\subsection{Configuração do experimento}
 
-\begin{figure}[ht]
-    \centering
-    \includegraphics[width=\linewidth]{../ground_truth/simulacao0/difusao_figura.png}
-    \caption{Fluido parado ($N=128$, $\nu = 0{,}05$): o campo permanece nulo.}
-    \label{fig:sim0}
-\end{figure}
+A malha foi fixada em $1024 \times 1024$, e o único parâmetro de entrada foi o
+tempo final simulado. As entradas i1 a i4 dobram o tempo simulado a cada passo,
+de modo que o trabalho total também dobra. O PaScal Analyzer foi usado com
+instrumentação manual da região do passo de tempo, para 1, 2, 4 e 8 cores.
 
-\subsection{Difusão de uma perturbação}
+\subsection{Resultados}
 
-A Figura~\ref{fig:sim1} mostra a difusão da perturbação gaussiana
-($N = 128$, $\nu = 0{,}01$, até $t = 0{,}5$). Os mapas de calor mostram o pico
-se alargando e perdendo intensidade, sem oscilações nem artefatos nas bordas. O
-máximo de $u$ cai de $0{,}994$ em $t = 0$ para $0{,}437$, $0{,}275$ e $0{,}200$
-em $t = 0{,}160$, $0{,}329$ e $0{,}500$. Esses valores coincidem com a
-expressão analítica: para $t = 0{,}5$ e $\nu = 0{,}01$,
-$0{,}0025/(0{,}0025 + 0{,}01) = 0{,}200$, e para $t = 0{,}329$ obtém-se
-$\approx 0{,}275$. Os perfis centrais numéricos também ficam sobre as curvas
-analíticas, e a curva de decaimento do pico segue a previsão ao longo de todo o
-intervalo.
-
-O valor inicial de $0{,}994$, e não $1{,}0$, não é um erro: com $N = 128$ par,
-nenhum centro de célula coincide exatamente com o centro da gaussiana, e o pico
-é amostrado a meia célula de distância em cada direção.
-
-\begin{figure}[ht]
-    \centering
-    \includegraphics[width=\linewidth]{../ground_truth/simulacao1/difusao_figura.png}
-    \caption{Difusão da perturbação gaussiana ($N=128$, $\nu = 0{,}01$),
-    comparada com a solução analítica.}
-    \label{fig:sim1}
-\end{figure}
-
-Os dois testes indicam que a discretização está correta: o estado de repouso é
-preservado, e a perturbação se difunde suavemente, em concordância com a
-solução analítica. O restante do relatório trata da versão paralela.
-
-\section{Paralelização: impacto de \texttt{schedule} e \texttt{collapse}}
-
-\subsection{O que se esperava}
-
-O kernel tem duas características que orientam a escolha das cláusulas. A
-carga é \emph{uniforme}: todos os pontos custam o mesmo, e como 1024 é
-divisível por 2, 4 e 8, o \texttt{static} já distribui o trabalho de forma
-exata, de modo que \texttt{dynamic} ou \texttt{guided} só acrescentariam
-overhead de escalonamento. Além disso, o laço faz poucas operações por byte
-lido e escrito (quatro arrays de $1024^2$ \texttt{double}, ou 32~MB no total), e por isso
-tende a ser limitado pela largura de banda de memória. Nesse cenário, o
-\texttt{collapse} não traz ganho de balanceamento (o laço externo já tem 1024
-iterações, muito mais que as threads) e acrescenta custo de instruções: o
-cálculo dos índices e dos vizinhos periódicos a cada ponto e um laço interno
-menos favorável às otimizações do compilador. Apenas a política \texttt{static}
-foi medida; \texttt{dynamic} e \texttt{guided} não foram avaliadas.
-
-\subsection{Resultados do PaScal Suite}
-
-A Tabela~\ref{tab:tempo} traz os tempos de execução e a
-Tabela~\ref{tab:efsp}, a eficiência e o speedup, ambos extraídos do PaScal
-Viewer. As figuras~\ref{fig:heat-ef} e \ref{fig:heat-sp} mostram os mesmos dados
-como mapas de calor (cada mapa tem escala própria; o speedup vai de 0 a 3 no
-\texttt{static} e de 0 a 4 no \texttt{collapse}).
+A Tabela~\ref{tab:tempo} traz os tempos de execução, e a
+Tabela~\ref{tab:medias} traz o speedup e a eficiência médios, ambos do PaScal
+Viewer. Nesses dois indicadores, cada versão é comparada com a sua própria
+execução com 1 core. A Figura~\ref{fig:heat} mostra os mapas do Viewer; as
+escalas de cores de cada mapa são diferentes.
 
 \begin{table}[ht]
 \centering
@@ -215,27 +178,19 @@ Cores & i1 & i2 & i3 & i4 & & i1 & i2 & i3 & i4 \\
 
 \begin{table}[ht]
 \centering
-\caption{Eficiência (\%) e speedup, cada um relativo ao 1 core da própria
-versão.}
-\label{tab:efsp}
+\caption{Speedup e eficiência médios (média das quatro entradas), cada versão
+em relação ao seu próprio 1 core.}
+\label{tab:medias}
 \small
-\begin{tabular}{c rrrr c rrrr}
+\begin{tabular}{c cc cc}
 \toprule
- & \multicolumn{4}{c}{\texttt{schedule(static)}} & & \multicolumn{4}{c}{\texttt{collapse(2)}} \\
-\cmidrule(lr){2-5} \cmidrule(lr){7-10}
-\multicolumn{10}{l}{\emph{Eficiência (\%)}} \\
-Cores & i1 & i2 & i3 & i4 & & i1 & i2 & i3 & i4 \\
+ & \multicolumn{2}{c}{Speedup} & \multicolumn{2}{c}{Eficiência (\%)} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+Cores & \texttt{static} & \texttt{collapse} & \texttt{static} & \texttt{collapse} \\
 \midrule
-2 & 68,5 & 72,0 & 72,2 & 73,1 & & 101,5 & 92,5 & 94,4 & 95,3 \\
-4 & 58,5 & 58,8 & 60,1 & 59,3 & & 88,0 & 85,4 & 86,2 & 91,5 \\
-8 & 34,9 & 35,5 & 35,7 & 37,1 & & 45,8 & 43,6 & 46,1 & 48,8 \\
-\midrule
-\multicolumn{10}{l}{\emph{Speedup}} \\
-Cores & i1 & i2 & i3 & i4 & & i1 & i2 & i3 & i4 \\
-\midrule
-2 & 1,37 & 1,44 & 1,44 & 1,46 & & 2,03 & 1,85 & 1,89 & 1,91 \\
-4 & 2,34 & 2,35 & 2,40 & 2,37 & & 3,52 & 3,42 & 3,45 & 3,66 \\
-8 & 2,79 & 2,84 & 2,85 & 2,97 & & 3,67 & 3,49 & 3,69 & 3,91 \\
+2 & 1,43 & 1,92 & 71,4 & 95,9 \\
+4 & 2,37 & 3,51 & 59,2 & 87,8 \\
+8 & 2,86 & 3,69 & 35,8 & 46,1 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -243,80 +198,68 @@ Cores & i1 & i2 & i3 & i4 & & i1 & i2 & i3 & i4 \\
 \begin{figure}[ht]
 \centering
 \begin{subfigure}[t]{0.48\textwidth}
-  \includegraphics[width=\linewidth]{Efficiency_static.png}
-  \caption{\texttt{schedule(static)}}
+  \includegraphics[width=\linewidth]{../images/schedule/Efficiency_region_0.1.png}
+  \caption{Eficiência, \texttt{schedule(static)}}
 \end{subfigure}\hfill
 \begin{subfigure}[t]{0.48\textwidth}
-  \includegraphics[width=\linewidth]{Efficiency_collapse.png}
-  \caption{\texttt{collapse(2)}}
-\end{subfigure}
-\caption{Mapas de eficiência do PaScal Viewer (cores $\times$ entradas).}
-\label{fig:heat-ef}
-\end{figure}
-
-\begin{figure}[ht]
-\centering
+  \includegraphics[width=\linewidth]{../images/collapse/Efficiency_region_0.1(1).png}
+  \caption{Eficiência, \texttt{collapse(2)}}
+\end{subfigure}\\[1ex]
 \begin{subfigure}[t]{0.48\textwidth}
-  \includegraphics[width=\linewidth]{Speedup_static.png}
-  \caption{\texttt{schedule(static)}}
+  \includegraphics[width=\linewidth]{../images/schedule/Speedup_region_0.1.png}
+  \caption{Speedup, \texttt{schedule(static)}}
 \end{subfigure}\hfill
 \begin{subfigure}[t]{0.48\textwidth}
-  \includegraphics[width=\linewidth]{Speedup_collapse.png}
-  \caption{\texttt{collapse(2)}}
+  \includegraphics[width=\linewidth]{../images/collapse/Speedup_region_0.1(1).png}
+  \caption{Speedup, \texttt{collapse(2)}}
 \end{subfigure}
-\caption{Mapas de speedup do PaScal Viewer (escalas diferentes entre os mapas).}
-\label{fig:heat-sp}
+\caption{Mapas do PaScal Viewer (cores $\times$ entradas).}
+\label{fig:heat}
 \end{figure}
 
-\subsection{Leitura pelas métricas do Viewer}
+\subsection{Diferenças de desempenho}
 
-Medido contra o próprio tempo serial, o \texttt{collapse(2)} parece escalar
-muito melhor: com 2, 4 e 8 cores, o speedup médio sobre as quatro entradas é
-1,92, 3,51 e 3,69, contra 1,43, 2,37 e 2,86 do \texttt{static}, e a eficiência
-média é de 95,9\%, 87,8\% e 46,1\%, contra 71,4\%, 59,2\% e 35,8\%. Com 2 cores
-e a entrada i1, a eficiência do \texttt{collapse} chega a 101,5\%, um resultado
-ligeiramente superlinear.
+\paragraph{Pelo speedup e pela eficiência, o \texttt{collapse} parece melhor.}
+Com 2, 4 e 8 cores, o \texttt{collapse} tem speedup maior e eficiência maior
+(Tabela~\ref{tab:medias}). Com 2 cores, a eficiência média é de 95,9\%, contra
+71,4\% do \texttt{static}.
 
-A métrica de escalabilidade do Viewer reforça esse quadro, e seus valores
-publicados são reproduzidos pela diferença
-$E(p, i_k) - E(p, i_1)$ em pontos percentuais, em que a eficiência de
-referência é limitada a 100\%. Essa fórmula é uma inferência a partir dos
-números, e não a definição oficial da ferramenta. No \texttt{static}, a
-eficiência cresce levemente com o tamanho da entrada (de $+0{,}3$ a $+4{,}6$ p.p.).
-No \texttt{collapse}, ela cai com 2 cores ($-7{,}5$ a $-4{,}7$ p.p.) e só
-volta a subir com 4 cores em i4 ($+3{,}6$ p.p.) e com 8 cores em i3 e i4 ($+0{,}3$ e
-$+3{,}0$ p.p.), porque o ponto de partida do \texttt{collapse} (i1) já é muito
-alto.
+\paragraph{Mas esses indicadores usam bases diferentes.} Com 1 core, o
+\texttt{collapse} leva em média 44\% mais tempo que o \texttt{static} (na maior
+entrada, 8,379~s contra 5,878~s). Como o speedup compara cada versão com o
+próprio tempo com 1 core, o \texttt{collapse} parte de uma base mais lenta, o
+que melhora seus indicadores. Para comparar de forma justa, a
+Tabela~\ref{tab:comum} mostra o tempo do \texttt{collapse} em relação ao do
+\texttt{static}, e o speedup das duas versões usando o 1 core do
+\texttt{static} como referência.
 
-\subsection{Comparação em tempo absoluto}
-
-O speedup de cada versão usa uma base diferente, e as bases são muito
-diferentes: com 1 core, o \texttt{collapse} leva em média 44\% mais tempo que o
-\texttt{static} (por exemplo, 8,379~s contra 5,878~s em i4). Parte do
-``melhor speedup'' do \texttt{collapse} vem, portanto, de partir de um tempo
-serial mais alto. A Tabela~\ref{tab:comum} usa uma referência comum: o speedup
-de ambas as versões em relação ao tempo serial do \texttt{static}, que é a
-melhor execução com 1 core.
+\paragraph{Em tempo absoluto, o \texttt{static} é equivalente ou melhor.}
+\begin{itemize}
+    \item Com 2 cores, o \texttt{collapse} é cerca de 7\% mais lento.
+    \item Com 4 cores, os tempos são praticamente iguais (o \texttt{collapse} é
+    cerca de 3\% mais rápido, até 7,7\% na maior entrada). Os tempos não trazem
+    desvio padrão, então uma diferença desse tamanho pode ser variação entre
+    execuções.
+    \item Com 8 cores, o \texttt{collapse} é cerca de 12\% mais lento. Em todas
+    as entradas, o menor tempo é o do \texttt{static} com 8 cores.
+\end{itemize}
 
 \begin{table}[ht]
 \centering
-\caption{Tempo do \texttt{collapse} em relação ao \texttt{static} (média das
-quatro entradas) e speedup/eficiência com referência comum (1 core do
-\texttt{static}).}
+\caption{Comparação em tempo absoluto (média das quatro entradas). O speedup
+usa o 1 core do \texttt{static} como referência para as duas versões.}
 \label{tab:comum}
 \small
-\begin{tabular}{c c cc cc}
+\begin{tabular}{c c cc}
 \toprule
- & Tempo & \multicolumn{2}{c}{Speedup (ref.\ comum)} &
- \multicolumn{2}{c}{Eficiência (ref.\ comum)} \\
-\cmidrule(lr){3-4} \cmidrule(lr){5-6}
-Cores & $T_{col}/T_{stat}$ & \texttt{static} & \texttt{collapse} &
-\texttt{static} & \texttt{collapse} \\
+ & Tempo & \multicolumn{2}{c}{Speedup (referência comum)} \\
+\cmidrule(lr){3-4}
+Cores & \texttt{collapse} / \texttt{static} & \texttt{static} & \texttt{collapse} \\
 \midrule
-1 & 1,44 & 1,00 & 0,70 & 100\% & 70\% \\
-2 & 1,07 & 1,43 & 1,34 & 71,4\% & 66,7\% \\
-4 & 0,97 & 2,37 & 2,44 & 59,1\% & 61,1\% \\
-8 & 1,12 & 2,86 & 2,57 & 35,8\% & 32,1\% \\
+1 & 1,44 & 1,00 & 0,70 \\
+2 & 1,07 & 1,43 & 1,34 \\
+4 & 0,97 & 2,37 & 2,44 \\
+8 & 1,12 & 2,86 & 2,57 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -340,87 +283,33 @@ Cores & $T_{col}/T_{stat}$ & \texttt{static} & \texttt{collapse} &
 \label{fig:tempo}
 \end{figure}
 
-Com essa referência, o quadro muda. O \texttt{collapse} é mais lento com 2 cores
-(7\% em média) e com 8 cores (12\%), e só fica ligeiramente à frente com 4 cores
-(3\% em média, até 7,7\% em i4; a diferença é pequena e pode estar dentro da
-variação entre execuções, que não foi medida). A menor marca de tempo de cada
-entrada é sempre do \texttt{static} com 8 cores (por exemplo, 1,980~s contra
-2,145~s em i4).
+\paragraph{Ganho ao passar de 4 para 8 cores.} O \texttt{static} reduz o tempo
+em 16\% a 20\%, enquanto o \texttt{collapse} reduz apenas 2\% a 7\%. Nas duas
+versões, a eficiência com 8 cores é baixa (35,8\% e 46,1\%)
 
-\subsection{Interpretação}
-
-\paragraph{Por que o \texttt{collapse} escala ``melhor'' sem ser mais rápido.}
-O \texttt{collapse} faz mais trabalho por ponto: quatro comparações de contorno
-por ponto, no lugar de duas por ponto mais duas por linha, a recuperação dos índices $i$ e
-$j$ a partir do índice linear e um laço interno menos favorável à otimização do
-compilador. Com 1 core, esse custo extra fica totalmente exposto (+44\% de
-tempo). Com mais cores, o gargalo passa a ser a memória, e a computação
-adicional é parcialmente escondida atrás das esperas por dados. O tempo do
-\texttt{collapse} se aproxima do \texttt{static} (igual com 4 cores) e, ao
-dividir pelo tempo serial mais alto, o speedup e a eficiência saem inflados.
-Esse comportamento é compatível com um kernel limitado por memória, mas essa é
-uma hipótese que os dados sustentam, e não uma medição direta.
-
-\paragraph{O platô com 8 cores.} Entre 4 e 8 cores, o \texttt{static} ainda
-reduz o tempo em 16\% a 20\%, enquanto o \texttt{collapse} reduz apenas 2\% a
-7\%. Dobrar os cores não chega nem perto de dobrar o desempenho em nenhuma das
-versões (eficiência de 36\% e 46\% com 8 cores). A causa exata do platô mais
-marcado do \texttt{collapse} não foi determinada; entre as hipóteses estão a
-saturação da largura de banda de memória, o compartilhamento de unidades de
-execução se alguns dos 8 cores forem threads de hyper-threading, e o custo
-adicional de instruções do \texttt{collapse}. Distinguir entre elas exigiria
-os contadores de hardware (opção \texttt{--fgpe} do Analyzer) e a topologia da
-máquina.
-
-\paragraph{Balanceamento de carga.} Como a carga por ponto é uniforme e 1024 e
-$1024^2$ são divisíveis por 2, 4 e 8, o desbalanceamento não explica a
-diferença entre as versões. É coerente com isso o fato de a eficiência de cada
-versão variar pouco entre as entradas i1 a i4 (poucos pontos percentuais),
-isto é, o comportamento depende pouco do tamanho da simulação.
-
-\paragraph{Sobre a cláusula \texttt{schedule}.} Neste problema, o
-\texttt{schedule(static)} é a escolha natural: não há custo de escalonamento em
-tempo de execução, e cada thread processa sempre o mesmo bloco de linhas em
-todos os passos de tempo, o que favorece o reaproveitamento de cache e a
-localidade em memória. Como a carga é uniforme, não há desbalanceamento que
-\texttt{dynamic} ou \texttt{guided} pudessem corrigir; elas só adicionariam
-overhead. Essa expectativa teórica não foi testada, pois apenas \texttt{static}
-foi medido.
-
-\subsection{Limitações}
-
-\begin{itemize}
-    \item Apenas \texttt{schedule(static)} foi medido, com e sem
-    \texttt{collapse}; \texttt{dynamic}, \texttt{guided} e diferentes tamanhos
-    de chunk ficaram de fora.
-    \item Os tempos não trazem desvio padrão; as diferenças de poucos
-    por cento (por exemplo, \texttt{collapse} 3\% mais rápido com 4 cores)
-    podem estar dentro do ruído.
-    \item O teste foi limitado a 8 cores, e as causas do platô com 8 cores são
-    hipóteses não verificadas.
-    \item Os mapas de escalabilidade forte e fraca, e a perda de speedup, não
-    foram usados quantitativamente.
-\end{itemize}
+\paragraph{Sobre o balanceamento.} Como as duas versões já dividem o trabalho
+de forma igual entre as threads, a diferença de desempenho não vem do
+balanceamento de carga. Dividir o trabalho em partes menores, como faz o
+\texttt{collapse}, não trouxe ganho neste problema, e a versão com
+\texttt{collapse} executa mais instruções por ponto.
 
 \section{Conclusão}
 
-A simulação reproduz o comportamento esperado da difusão viscosa: o fluido
-parado permanece parado, e uma perturbação gaussiana se alarga e perde
-intensidade de acordo com a solução analítica, com o pico decaindo como
-$A\sigma_0^2/(\sigma_0^2 + 2\nu t)$. Quanto à paralelização, o
-\texttt{collapse(2)} parece escalar melhor nas métricas do Viewer (eficiência
-de 95,9\% contra 71,4\% com 2 cores), mas esse resultado é em boa parte efeito
-de um tempo serial 44\% maior. Em tempo absoluto, o \texttt{schedule(static)}
-aplicado apenas ao laço externo é equivalente ou melhor em todas as contagens
-de cores, exceto por uma pequena vantagem do \texttt{collapse} com 4 cores, e
-obtém o menor tempo com 8 cores (speedup de 2,86 contra 2,57, com referência
-comum). Para um laço externo com 1024 iterações e carga uniforme, o
-\texttt{collapse} não traz benefício de balanceamento e acrescenta custo de
-instruções. Ambas as versões apresentam eficiência baixa com 8 cores (36\% e
-46\%), o que é consistente com um kernel limitado por memória.
-
-Em resumo, métricas relativas ao próprio tempo serial devem ser lidas junto
-com os tempos absolutos antes de se concluir qual cláusula é melhor.
+\begin{itemize}
+    \item A simulação teve o comportamento esperado: o fluido parado permaneceu
+    parado, e a perturbação se espalhou suavemente, de acordo com a solução
+    analítica.
+    \item Como a carga é uniforme e a malha é divisível pelo número de threads,
+    o escalonamento estático já balanceia a carga, e o \texttt{schedule(static)}
+    no laço externo foi suficiente.
+    \item O \texttt{collapse(2)} aparenta escalar melhor no PaScal Viewer, mas
+    isso se deve em boa parte ao seu tempo com 1 core ser 44\% maior.
+    \item Em tempo absoluto, o \texttt{schedule(static)} é equivalente ou
+    melhor, e dá o menor tempo com 8 cores (1,980~s contra 2,145~s na maior
+    entrada).
+    \item Speedup e eficiência relativos ao próprio 1 core devem ser lidos junto
+    com os tempos absolutos antes de se escolher uma cláusula.
+\end{itemize}
 
 \newpage
 \appendix
