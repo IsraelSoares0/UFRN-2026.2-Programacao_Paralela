@@ -1,0 +1,220 @@
+\documentclass[a4paper,12pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black}
+\renewcommand{\tablename}{Tabela}
+\renewcommand{\lstlistingname}{Código}
+\setlength{\tabcolsep}{4pt}
+\setlength{\emergencystretch}{3em}
+
+% ---------- Configuração do realce de sintaxe (C) ----------
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codecomment}{RGB}{0,128,0}
+\definecolor{codestring}{RGB}{163,21,21}
+\definecolor{framecolor}{RGB}{200,200,200}
+
+\lstdefinestyle{cstyle}{
+    language=C,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecomment}\itshape,
+    stringstyle=\color{codestring},
+    numberstyle=\tiny\color{gray},
+    numbers=left,
+    numbersep=6pt,
+    frame=single,
+    rulecolor=\color{framecolor},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    columns=flexible,
+    morekeywords={size_t},
+    extendedchars=true,
+    literate=
+        {á}{{\'a}}1 {à}{{\`a}}1 {â}{{\^a}}1 {ã}{{\~a}}1
+        {é}{{\'e}}1 {ê}{{\^e}}1 {í}{{\'i}}1
+        {ó}{{\'o}}1 {ô}{{\^o}}1 {õ}{{\~o}}1
+        {ú}{{\'u}}1 {ü}{{\"u}}1 {ç}{{\c c}}1
+        {Á}{{\'A}}1 {À}{{\`A}}1 {Â}{{\^A}}1 {Ã}{{\~A}}1
+        {É}{{\'E}}1 {Ê}{{\^E}}1 {Í}{{\'I}}1
+        {Ó}{{\'O}}1 {Ô}{{\^O}}1 {Õ}{{\~O}}1
+        {Ú}{{\'U}}1 {Ü}{{\"U}}1 {Ç}{{\c C}}1
+}
+
+\title{Tarefa 17: Tipos Derivados em MPI \\ \large Multiplicação Matriz-Vetor com Distribuição por Colunas}
+\author{Israel Soares de Castro Filho \\ Matrícula: 20250070780}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Introdução}
+
+A tarefa 16 distribuiu a matriz $A$ ($M \times N$) por \textbf{linhas} entre os processos MPI. Nesta tarefa, a mesma multiplicação $y = Ax$ é reimplementada distribuindo \textbf{colunas}:
+
+\begin{itemize}
+    \item cada processo recebe um bloco de colunas de $A$ e o segmento correspondente de $x$;
+    \item cada processo calcula uma contribuição parcial para \textbf{todos} os elementos de $y$;
+    \item os vetores parciais são somados no processo 0 com \texttt{MPI\_Reduce} (\texttt{MPI\_SUM}).
+\end{itemize}
+
+Como a matriz é armazenada por linhas (\emph{row-major}), um bloco de colunas não é contíguo na memória. Por isso a tarefa usa um \textbf{tipo derivado} para descrevê-lo. O objetivo é comparar acesso à memória e desempenho com a versão por linhas.
+
+\section{Metodologia}
+
+\textbf{Ferramentas:} MPI e supercomputador NPAD.
+
+\subsection{Tipo derivado para colunas}
+
+Com $P$ processos, cada um fica com \texttt{colunas\_local} $= \lceil N/P \rceil$ colunas. Como o \texttt{MPI\_Scatter} exige blocos iguais, a matriz é completada com colunas de zeros até \texttt{N\_pad} $=$ \texttt{colunas\_local} $\times P$ (os zeros não alteram o resultado).
+
+O tipo é criado em dois passos (Código~\ref{lst:tipo}):
+
+\begin{itemize}
+    \item \texttt{MPI\_Type\_vector}: descreve $M$ blocos de \texttt{colunas\_local} doubles, com passo de \texttt{N\_pad} doubles (uma linha inteira). Ou seja, ``um bloco de colunas'' atravessando todas as linhas.
+    \item \texttt{MPI\_Type\_create\_resized}: reduz o \emph{extent} do tipo para \texttt{colunas\_local} doubles. Sem isso, o \texttt{MPI\_Scatter} avançaria o tamanho total do tipo entre um processo e outro; com o \emph{resize}, o bloco do processo $i$ começa exatamente na coluna $i \cdot$\texttt{colunas\_local}.
+\end{itemize}
+
+\begin{lstlisting}[style=cstyle, caption={Criação do tipo derivado e uso no Scatter}, label={lst:tipo}]
+MPI_Datatype tipo_col, tipo_col_resized;
+MPI_Type_vector(M, colunas_local, N_pad, MPI_DOUBLE, &tipo_col);
+MPI_Type_create_resized(tipo_col, 0,
+                        (MPI_Aint)(colunas_local * sizeof(double)),
+                        &tipo_col_resized);
+MPI_Type_commit(&tipo_col_resized);
+
+/* envia 1 "bloco de colunas" a cada processo */
+MPI_Scatter(A, 1, tipo_col_resized,
+            A_local, M * colunas_local, MPI_DOUBLE,
+            0, MPI_COMM_WORLD);
+\end{lstlisting}
+
+O processo que recebe os dados os guarda em \texttt{A\_local} como uma matriz $M \times$ \texttt{colunas\_local} contígua. O segmento de $x$ é enviado com um segundo \texttt{MPI\_Scatter} e o resultado é obtido com:
+
+\begin{lstlisting}[style=cstyle, caption={Redução dos vetores parciais}]
+MPI_Reduce(y_parcial, y, M, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+\end{lstlisting}
+
+\subsection{Experimentos}
+
+\begin{itemize}
+    \item Matrizes quadradas ($M = N$) de 1024 a 16384.
+    \item Casos \emph{intra} (processos no mesmo nó, 1 a 8 processos) e \emph{inter} (processos em nós diferentes, 2 a 16 processos).
+    \item Tempo \textbf{total}: distribuição, cálculo e coleta/redução. Tempo de \textbf{cálculo}: apenas o laço de multiplicação. Em ambos, vale o maior tempo entre os processos. Chamamos de \emph{comunicação} a diferença entre os dois.
+    \item A versão por linhas (tarefa 16) foi executada nas mesmas condições.
+\end{itemize}
+
+\section{Resultados}
+
+A Tabela~\ref{tab:n16384} mostra o maior caso ($N = 16384$). A Tabela~\ref{tab:speedup} traz o \emph{speedup} do tempo total em relação a 1 processo. A Tabela~\ref{tab:razao} mostra como a diferença entre as versões cresce com o tamanho do problema.
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Tempos para $N = 16384$ (segundos). Razão = colunas / linhas (tempo total).}
+\label{tab:n16384}
+\begin{tabular}{llrrrrr}
+\toprule
+Caso & $P$ & Total linhas & Total colunas & Razão & Cálc. linhas & Cálc. colunas \\
+\midrule
+intra & 1  & 0,4669 & 0,5108 & 1,09 & 0,2690 & 0,2717 \\
+intra & 2  & 0,3515 & 0,5743 & 1,63 & 0,1358 & 0,1360 \\
+intra & 4  & 0,3230 & 1,0899 & 3,37 & 0,0687 & 0,0678 \\
+intra & 8  & 0,3022 & 1,0867 & 3,60 & 0,0348 & 0,0347 \\
+\midrule
+inter & 2  & 0,3451 & 0,4004 & 1,16 & 0,1356 & 0,1347 \\
+inter & 4  & 0,3124 & 0,4407 & 1,41 & 0,0701 & 0,0675 \\
+inter & 8  & 0,2904 & 0,7304 & 2,52 & 0,0344 & 0,0343 \\
+inter & 16 & 0,1310 & 0,5588 & 4,27 & 0,0179 & 0,0180 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h!]
+\centering
+\small
+\caption{\emph{Speedup} do tempo total para $N = 16384$ (base: 1 processo da respectiva versão).}
+\label{tab:speedup}
+\begin{tabular}{llrr}
+\toprule
+Caso & $P$ & Linhas & Colunas \\
+\midrule
+intra & 2  & 1,33 & 0,89 \\
+intra & 4  & 1,45 & 0,47 \\
+intra & 8  & 1,54 & 0,47 \\
+\midrule
+inter & 2  & 1,35 & 1,28 \\
+inter & 4  & 1,49 & 1,16 \\
+inter & 8  & 1,61 & 0,70 \\
+inter & 16 & 3,56 & 0,91 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Razão de tempo total colunas / linhas conforme o tamanho da matriz.}
+\label{tab:razao}
+\begin{tabular}{lrrrrr}
+\toprule
+Caso & $N=1024$ & $2048$ & $4096$ & $8192$ & $16384$ \\
+\midrule
+intra, $P=8$  & 2,34 & 2,44 & 2,34 & 2,71 & 3,60 \\
+inter, $P=16$ & 1,84 & 2,22 & 3,46 & 3,24 & 4,27 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Análise}
+
+\subsection{Diferenças de acesso à memória}
+
+\begin{itemize}
+    \item \textbf{Linhas:} no processo 0, o bloco de cada processo já é contíguo na memória, então o \texttt{Scatter} é uma cópia sequencial. No cálculo, cada processo percorre \texttt{A\_local} sequencialmente, reutiliza $x$ inteiro (que cabe em cache) e escreve cada \texttt{y\_local[i]} uma única vez.
+    \item \textbf{Colunas:} o bloco de cada processo está espalhado: são $M$ pedaços pequenos separados por uma linha inteira de $A$ (passo de $N$ doubles). O tipo derivado faz o MPI percorrer a matriz com saltos para montar cada envio, o que tem pior localidade de cache que uma cópia contígua.
+    \item \textbf{No cálculo, o acesso é equivalente:} depois do \texttt{Scatter}, \texttt{A\_local} chega contígua, e o laço lê linha a linha, igual à versão anterior. Os tempos de cálculo das duas versões são praticamente iguais (Tabela~\ref{tab:n16384}); o custo do acesso espaçado aparece na \textbf{distribuição}, não no laço.
+    \item \textbf{Saída:} cada processo escreve um \texttt{y\_parcial} de tamanho $M$ completo (na versão por linhas, só $M/P$ elementos).
+\end{itemize}
+
+\subsection{Desempenho em relação à versão por linhas}
+
+\begin{itemize}
+    \item \textbf{Cálculo escala igual nas duas versões:} o \emph{speedup} do tempo de cálculo fica próximo de $P$ (cerca de 7,8 com 8 processos e 15 com 16, para $N = 16384$). A divisão do trabalho é a mesma.
+    \item \textbf{A comunicação é o gargalo da versão por colunas.} Para $N=16384$ com 8 processos no mesmo nó, a comunicação passa de 0,27~s (linhas) para 1,05~s (colunas); com 16 processos em nós diferentes, de 0,11~s para 0,54~s.
+    \item \textbf{Por quê:} na versão por linhas, o \texttt{Gather} reúne $M$ elementos no total e o \texttt{Bcast} envia $x$. Na versão por colunas, cada processo contribui para o \texttt{Reduce} com um vetor de $M$ elementos, que ainda precisa ser somado. O empacotamento espaçado do \texttt{Scatter} soma-se a isso.
+    \item \textbf{Efeito no \emph{speedup}:} a versão por linhas chega a 3,56 (inter, 16 processos), enquanto a por colunas não passa de 1,28 e fica abaixo de 1 em vários casos (Tabela~\ref{tab:speedup}). Com 4 ou 8 processos no mesmo nó, ela chega a ser mais de duas vezes mais lenta que o programa com 1 processo.
+    \item \textbf{A diferença cresce com o problema:} a razão colunas/linhas sobe com $N$ e com $P$ (Tabela~\ref{tab:razao}), chegando a 4,27 vezes. Para $N=1024$ os tempos são de poucos milissegundos e as medidas são mais ruidosas.
+\end{itemize}
+
+\section{Conclusão}
+
+\begin{itemize}
+    \item \texttt{MPI\_Type\_vector} com \texttt{MPI\_Type\_create\_resized} permite distribuir colunas com um único \texttt{MPI\_Scatter}, sem cópia manual.
+    \item O laço de cálculo tem o mesmo desempenho que na versão por linhas, pois cada processo trabalha sobre um bloco contíguo.
+    \item A distribuição por colunas é mais lenta, até 4,3 vezes no maior caso, por causa do acesso espaçado na distribuição e da redução de vetores de tamanho $M$ em vez de uma coleta de $M/P$ por processo.
+    \item Para matrizes armazenadas por linhas, a distribuição por linhas é a melhor escolha para $y = Ax$. A distribuição por colunas se justifica quando os dados já estão divididos por colunas.
+\end{itemize}
+
+\newpage
+\appendix
+
+\section{Código-Fonte}
+
+\lstinputlisting[style=cstyle, caption={tarefa17.c}]{../src/tarefa17.c}
+
+\end{document}
