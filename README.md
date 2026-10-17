@@ -2,7 +2,7 @@
 
 ## Descrição
 
-Esse repositória contém as atividades na matéria de Programação Paralela da UFRN.
+Esse repositório contém as atividades na matéria de Programação Paralela da UFRN.
 
 ## Progresso Atual
 
