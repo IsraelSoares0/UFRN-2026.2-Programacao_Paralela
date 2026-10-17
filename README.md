@@ -22,7 +22,7 @@ Esse repositória contém as atividades na matéria de Programação Paralela da
   - [ ] Tarefa 12
   - [ ] Tarefa 13
   - [x] Tarefa 14
-  - [ ] Tarefa 15
+  - [x] Tarefa 15
   - [ ] Tarefa 16
   - [ ] Tarefa 17
   - [ ] Tarefa 18

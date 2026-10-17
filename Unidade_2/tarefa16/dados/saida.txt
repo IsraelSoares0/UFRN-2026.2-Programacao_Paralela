@@ -1,0 +1,62 @@
+Nos: r2n03 r2n04
+=== Limites no no r2n03 ===
+core file size          (blocks, -c) unlimited
+data seg size           (kbytes, -d) unlimited
+scheduling priority             (-e) 0
+file size               (blocks, -f) unlimited
+pending signals                 (-i) 2061796
+max locked memory       (kbytes, -l) unlimited
+max memory size         (kbytes, -m) 524288000
+open files                      (-n) 131072
+pipe size            (512 bytes, -p) 8
+POSIX message queues     (bytes, -q) 819200
+real-time priority              (-r) 0
+stack size              (kbytes, -s) unlimited
+cpu time               (seconds, -t) unlimited
+max user processes              (-u) 2061796
+virtual memory          (kbytes, -v) unlimited
+file locks                      (-x) unlimited
+              total        used        free      shared  buff/cache   available
+Mem:         515518        3530      486147        3005       25840      506503
+Swap:             0           0           0
+=== intra_1p | M=N=1024 ===
+=== intra_2p | M=N=1024 ===
+=== intra_4p | M=N=1024 ===
+=== intra_8p | M=N=1024 ===
+=== inter_2p | M=N=1024 ===
+=== inter_4p | M=N=1024 ===
+=== inter_8p | M=N=1024 ===
+=== inter_16p | M=N=1024 ===
+=== intra_1p | M=N=2048 ===
+=== intra_2p | M=N=2048 ===
+=== intra_4p | M=N=2048 ===
+=== intra_8p | M=N=2048 ===
+=== inter_2p | M=N=2048 ===
+=== inter_4p | M=N=2048 ===
+=== inter_8p | M=N=2048 ===
+=== inter_16p | M=N=2048 ===
+=== intra_1p | M=N=4096 ===
+=== intra_2p | M=N=4096 ===
+=== intra_4p | M=N=4096 ===
+=== intra_8p | M=N=4096 ===
+=== inter_2p | M=N=4096 ===
+=== inter_4p | M=N=4096 ===
+=== inter_8p | M=N=4096 ===
+=== inter_16p | M=N=4096 ===
+=== intra_1p | M=N=8192 ===
+=== intra_2p | M=N=8192 ===
+=== intra_4p | M=N=8192 ===
+=== intra_8p | M=N=8192 ===
+=== inter_2p | M=N=8192 ===
+=== inter_4p | M=N=8192 ===
+=== inter_8p | M=N=8192 ===
+=== inter_16p | M=N=8192 ===
+=== intra_1p | M=N=16384 ===
+=== intra_2p | M=N=16384 ===
+=== intra_4p | M=N=16384 ===
+=== intra_8p | M=N=16384 ===
+=== inter_2p | M=N=16384 ===
+=== inter_4p | M=N=16384 ===
+=== inter_8p | M=N=16384 ===
+=== inter_16p | M=N=16384 ===
+Concluido. Resumo em resultados_todos.csv
