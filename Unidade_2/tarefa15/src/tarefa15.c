@@ -3,10 +3,10 @@
  * Método: Diferenças Finitas Explícito (FTCS - Forward Time, Centered Space)
  * Condição de contorno: PERIÓDICA (o último ponto é vizinho do primeiro)
  *
- * Equação resolvida:  du/dt = alpha * d²u/dx²
+ * Equação resolvida:  du/dt = alpha * d^2u/dx^2
  *
  * Condição inicial: perfil em cosseno, mais quente no centro da barra
- * e mais frio nas extremidades — e como as extremidades se encontram
+ * e mais frio nas extremidades e como as extremidades se encontram
  * (formando o anel), a temperatura já "fecha" nesse ponto.
  *
  * Compilar: gcc barra_1d.c -o barra_1d -lm
@@ -30,7 +30,7 @@
 /* Parâmetros de simulação */
 #define N_PONTOS 1000           /* Número de pontos na barra */
 #define COMPRIMENTO 1.0         /* Comprimento da barra (m) */
-#define ALPHA 0.01              /* Difusividade térmica (m²/s) */
+#define ALPHA 0.01              /* Difusividade térmica (m^2/s) */
 #define T_TOTAL 2.0             /* Tempo total de simulação (s) */
 #define TEMP_BASE 0.0           /* temperatura nas bordas/base (ºC) */
 #define TEMP_CENTRO 100.0       /* temperatura no centro da barra (ºC) */
