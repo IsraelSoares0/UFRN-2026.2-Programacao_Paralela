@@ -1,0 +1,8 @@
+Parametros da simulacao:
+  Pontos na barra : 1000
+  dx              : 0.001000 m
+  dt              : 4.499944e-05 s
+  Passos de tempo : 44445
+  Numero de Fourier (r = alpha*dt/dx^2) = 0.4500 (<= 0.5)
+
+Simulacao concluida. Resultados salvos em 'temperaturas.csv'.

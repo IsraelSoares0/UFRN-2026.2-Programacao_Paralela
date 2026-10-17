@@ -10,7 +10,7 @@
  * (formando o anel), a temperatura já "fecha" nesse ponto.
  *
  * Compilar: gcc barra_1d.c -o barra_1d -lm
- * Executar: ./difusao
+ * Executar: ./barra_1d
  *
  * Saída: arquivo "temperaturas.csv" com a temperatura ao longo do anel
  *        em diferentes instantes de tempo (uma linha por instante salvo).
@@ -22,13 +22,13 @@
 #include <math.h>
 
 /* Parâmetros de simulação */
-#define N_PONTOS 100 /* Número de pontos na barra */
-#define COMPRIMENTO 1.0 /* Comprimento da barra (m) */
-#define ALPHA 0.01 /* Difusividade térmica (m²/s) */
-#define T_TOTAL 2.0 /* Tempo total de simulação (s) */
-#define TEMP_BASE 20.0 /* temperatura nas bordas/base (ºC) */
-#define TEMP_CENTRO 100.0 /* temperatura no centro da barra (ºC) */
-#define N_SALVAS 10 /* quantos instantes de tempo salvar no CSV */
+#define N_PONTOS 1000           /* Número de pontos na barra */
+#define COMPRIMENTO 1.0         /* Comprimento da barra (m) */
+#define ALPHA 0.01              /* Difusividade térmica (m²/s) */
+#define T_TOTAL 2.0             /* Tempo total de simulação (s) */
+#define TEMP_BASE 0.0           /* temperatura nas bordas/base (ºC) */
+#define TEMP_CENTRO 100.0       /* temperatura no centro da barra (ºC) */
+#define N_SALVAS 10             /* quantos instantes de tempo salvar no CSV */
 
 int main(void) {
     double dx = COMPRIMENTO / N_PONTOS;
@@ -62,7 +62,7 @@ int main(void) {
         u_atual[i] = TEMP_BASE + (TEMP_CENTRO - TEMP_BASE) * (cos(fase) + 1.0) / 2.0;
     }
 
-    FILE *arquivo = fopen("temperaturas.csv", "w");
+    FILE *arquivo = fopen("dados/temperaturas.csv", "w");
     if (!arquivo) {
         fprintf(stderr, "Erro ao criar arquivo de saida.\n");
         free(u_atual);
