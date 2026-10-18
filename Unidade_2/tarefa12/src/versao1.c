@@ -32,7 +32,7 @@
 #define IDX(i, j, N) ((i) * (N) + (j))
 
 #define MODO   2
-#define N_GRID 2048
+#define N_GRID 1024
 #define NU     0.01
 
 static void passo(const double *u, const double *v,
