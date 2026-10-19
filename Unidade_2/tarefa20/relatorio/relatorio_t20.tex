@@ -1,0 +1,189 @@
+\documentclass[a4paper,12pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black}
+\renewcommand{\tablename}{Tabela}
+\renewcommand{\lstlistingname}{Código}
+
+% ---------- Configuração do realce de sintaxe (C) ----------
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codecomment}{RGB}{0,128,0}
+\definecolor{codestring}{RGB}{163,21,21}
+\definecolor{framecolor}{RGB}{200,200,200}
+
+\lstdefinestyle{cstyle}{
+    language=C,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecomment}\itshape,
+    stringstyle=\color{codestring},
+    numberstyle=\tiny\color{gray},
+    numbers=left,
+    numbersep=6pt,
+    frame=single,
+    rulecolor=\color{framecolor},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    columns=flexible,
+    morekeywords={size_t},
+    extendedchars=true,
+    literate=
+        {á}{{\'a}}1 {à}{{\`a}}1 {â}{{\^a}}1 {ã}{{\~a}}1
+        {é}{{\'e}}1 {ê}{{\^e}}1 {í}{{\'i}}1
+        {ó}{{\'o}}1 {ô}{{\^o}}1 {õ}{{\~o}}1
+        {ú}{{\'u}}1 {ü}{{\"u}}1 {ç}{{\c c}}1
+        {Á}{{\'A}}1 {À}{{\`A}}1 {Â}{{\^A}}1 {Ã}{{\~A}}1
+        {É}{{\'E}}1 {Ê}{{\^E}}1 {Í}{{\'I}}1
+        {Ó}{{\'O}}1 {Ô}{{\^O}}1 {Õ}{{\~O}}1
+        {Ú}{{\'U}}1 {Ü}{{\"U}}1 {Ç}{{\c C}}1
+}
+
+\title{Tarefa 20: Equação do Calor 2D com Offload OpenMP para GPU}
+\author{Israel Soares de Castro Filho \\ Matrícula: 20250070780}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Introdução}
+
+O objetivo da tarefa é executar na GPU o exemplo de transferência de calor
+(\texttt{heat.c}) do tutorial de programação de GPUs com OpenMP, usando as
+diretivas de movimentação de dados para que a cópia entre CPU e GPU não domine
+a execução e a GPU não fique ociosa.
+
+O programa resolve a equação do calor em uma grade $n \times n$ com um estêncil
+de 5 pontos, avançando no tempo passo a passo. O resultado é validado contra a
+solução exata conhecida (erro L2).
+
+\section{Metodologia}
+
+\textbf{Ambiente.} O código foi compilado com GCC, com OpenMP e offload para
+NVIDIA (\texttt{nvptx}), e executado em uma GPU NVIDIA RTX 4070 Super local,
+devido à fila de tarefas do NPAD. O perfilamento foi feito com o \texttt{nsys},
+rastreando as chamadas CUDA.
+
+\textbf{Estratégia de dados.} O ponto principal é manter os dois vetores
+(\texttt{u} e \texttt{u\_tmp}) na GPU durante todo o laço de tempo:
+
+\begin{lstlisting}[style=cstyle, caption={Diretivas de movimentação de dados}]
+#pragma omp target enter data map(to: u[0:n*n], u_tmp[0:n*n])
+for (int t = 0; t < nsteps; ++t) {
+    solve(n, alpha, dx, dt, u, u_tmp);   // kernel na GPU
+    tmp = u; u = u_tmp; u_tmp = tmp;     // troca de ponteiros
+}
+#pragma omp target exit data map(from: u[0:n*n])
+\end{lstlisting}
+
+Assim, os dados vão para a GPU uma vez, os 100 passos rodam sem nenhuma cópia
+intermediária (a troca de ponteiros é feita no \textit{host}, sem copiar dados)
+e só o resultado final volta para a CPU. O kernel usa
+\texttt{\#pragma omp target} com \texttt{\#pragma omp loop collapse(2)}.
+
+\textbf{Experimentos.} Foram testadas grades com $n \in \{500, 1000, 2000, 4000,
+8000\}$, 100 passos de tempo e 3 repetições por tamanho. O programa mede o tempo
+com o relógio do OpenMP e grava os resultados em um arquivo CSV. Cada perfil
+do \texttt{nsys} cobre as 3 repetições (300 chamadas do kernel), e os tempos do CSV
+foram medidos nessas mesmas execuções.
+
+\section{Resultados}
+
+A Tabela~\ref{tab:tempos} mostra as médias das 3 repetições. O tempo de
+\textit{solve} é o laço de tempo na GPU (incluindo as cópias), e o tempo total
+inclui também a inicialização e o cálculo do erro, feitos na CPU.
+
+\begin{table}[h!]
+\centering
+\caption{Tempos médios (3 repetições, 100 passos).}
+\label{tab:tempos}
+\begin{tabular}{rrrrr}
+\toprule
+$n$ & Solve (s) & Total (s) & Fator vs. $n$ anterior & Erro L2 \\
+\midrule
+500  & 0,0445 & 0,0490 & --   & $8{,}10\times10^{-10}$ \\
+1000 & 0,0906 & 0,1107 & 2,04 & $4{,}06\times10^{-10}$ \\
+2000 & 0,2963 & 0,3764 & 3,27 & $2{,}02\times10^{-10}$ \\
+4000 & 1,3071 & 1,6457 & 4,41 & $9{,}46\times10^{-11}$ \\
+8000 & 5,3722 & 6,7985 & 4,11 & $5{,}14\times10^{-11}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A Tabela~\ref{tab:perfil} resume o perfil do \texttt{nsys}. O kernel é o tempo
+médio de uma chamada. Ida é o volume copiado da CPU para a GPU e volta é o da
+GPU para a CPU, ambos por execução. A última coluna é o tempo das cópias (ida
+mais volta) em relação ao tempo de \textit{solve}.
+
+\begin{table}[h!]
+\centering
+\caption{Resumo do perfil (\texttt{nsys}).}
+\label{tab:perfil}
+\small
+\begin{tabular}{rrrrrr}
+\toprule
+$n$ & Kernel (ms) & Kernel/Solve (\%) & Ida (MB) & Volta (MB) & Cópias/Solve (\%) \\
+\midrule
+500  & 0,398  & 89,5 & 4    & 2   & 0,8 \\
+1000 & 0,784  & 86,5 & 16   & 8   & 1,7 \\
+2000 & 2,785  & 94,0 & 64   & 32  & 2,0 \\
+4000 & 12,75  & 97,6 & 256  & 128 & 1,7 \\
+8000 & 52,70  & 98,1 & 1024 & 512 & 1,7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Análise}
+
+\textbf{Movimentação de dados.} Com \texttt{enter data} e \texttt{exit data}, os
+vetores são copiados uma única vez por execução. As cópias ficam em torno de
+2\% do tempo de \textit{solve} em todos os tamanhos, e o kernel ocupa de 87\% a
+98\% dele. Ou seja, a GPU passa quase todo o tempo calculando, e não esperando
+dados. Sem essas diretivas, cada passo copiaria os vetores nos dois sentidos, o
+que daria, por estimativa (não medida), mais de 100 GB de tráfego para
+$n = 8000$, contra cerca de 1,5 GB medidos aqui.
+
+\textbf{Escalabilidade.} Para as grades menores, o tempo cresce menos que 4
+vezes ao dobrar $n$ (fatores de 2,04 e 3,27), pois a GPU ainda não está
+totalmente ocupada e os custos fixos (lançamento do kernel, alocação)
+pesam. Para $n \geq 4000$ o fator se aproxima de 4, ou seja, o tempo passa a
+crescer com o número de pontos ($n^2$).
+
+\textbf{Tempo na CPU.} A diferença entre o tempo total e o de \textit{solve}
+vem do trabalho feito na CPU (valor inicial e erro L2) e cresce com $n^2$: chega
+a 1,43~s em $n = 8000$, cerca de 21\% do tempo total.
+
+\textbf{Correção.} O erro L2 diminui à medida que a grade refina e é idêntico
+entre as repetições, o que indica que o resultado na GPU está correto.
+
+\section{Conclusão}
+
+As diretivas \texttt{target enter data} e \texttt{target exit data} mantêm os
+dados na GPU durante todo o laço de tempo. Com isso, as cópias ficaram em cerca
+de 2\% do tempo de \textit{solve} e o kernel ocupa quase todo o restante, sem
+GPU ociosa por falta de dados. Como a movimentação de dados deixou de ser o
+problema, o próximo ganho de desempenho está na paralelização do próprio
+kernel.
+
+\newpage
+\appendix
+
+\section{Código-Fonte}
+
+\lstinputlisting[style=cstyle, caption={tarefa20.c}]{../src/tarefa20.c}
+
+\end{document}

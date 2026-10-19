@@ -1,0 +1,150 @@
+\documentclass[a4paper,12pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black}
+\renewcommand{\tablename}{Tabela}
+\renewcommand{\lstlistingname}{Código}
+
+% ---------- Configuração do realce de sintaxe (C) ----------
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codecomment}{RGB}{0,128,0}
+\definecolor{codestring}{RGB}{163,21,21}
+\definecolor{framecolor}{RGB}{200,200,200}
+
+\lstdefinestyle{cstyle}{
+    language=C,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecomment}\itshape,
+    stringstyle=\color{codestring},
+    numberstyle=\tiny\color{gray},
+    numbers=left,
+    numbersep=6pt,
+    frame=single,
+    rulecolor=\color{framecolor},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    columns=flexible,
+    morekeywords={size_t},
+    extendedchars=true,
+    literate=
+        {á}{{\'a}}1 {à}{{\`a}}1 {â}{{\^a}}1 {ã}{{\~a}}1
+        {é}{{\'e}}1 {ê}{{\^e}}1 {í}{{\'i}}1
+        {ó}{{\'o}}1 {ô}{{\^o}}1 {õ}{{\~o}}1
+        {ú}{{\'u}}1 {ü}{{\"u}}1 {ç}{{\c c}}1
+        {Á}{{\'A}}1 {À}{{\`A}}1 {Â}{{\^A}}1 {Ã}{{\~A}}1
+        {É}{{\'E}}1 {Ê}{{\^E}}1 {Í}{{\'I}}1
+        {Ó}{{\'O}}1 {Ô}{{\^O}}1 {Õ}{{\~O}}1
+        {Ú}{{\'U}}1 {Ü}{{\"U}}1 {Ç}{{\c C}}1
+}
+
+\title{Tarefa 19: Equação do Calor 2D em GPU com OpenMP e Perfilamento com nsys}
+\author{Israel Soares de Castro Filho \\ Matrícula: 20250070780}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Introdução}
+
+O programa resolve a equação do calor em 2D por diferenças finitas explícitas (estêncil de 5 pontos) em uma grade $n \times n$ (exemplo \texttt{heat.c} do tutorial de programação de GPUs com OpenMP). O objetivo da tarefa é executar o cálculo na GPU com diretivas OpenMP, observar a movimentação de dados entre o \emph{host} (CPU) e o dispositivo (GPU) e perfilar o programa com o \texttt{nsys} para diferentes tamanhos de problema.
+
+\section{Metodologia}
+
+\begin{itemize}
+    \item \textbf{Ambiente:} computador pessoal com GPU NVIDIA RTX 4070 Super, compilador \texttt{gcc} 15 com suporte a \emph{offload} para NVIDIA (OpenMP) e \texttt{nsys} para o perfilamento. Os testes não foram feitos no NPAD porque a fila estava cheia.
+    \item \textbf{Paralelização:} o laço do estêncil usa \texttt{target teams loop} e \texttt{collapse(2)} para distribuir as iterações entre os times de threads da GPU.
+    \item \textbf{Movimentação de dados:} a cláusula \texttt{map(tofrom: u, u\_tmp)} fica dentro de \texttt{solve()}, então os dois vetores vão para a GPU e voltam a cada passo de tempo.
+    \item \textbf{Parâmetros:} $n \in \{500, 1000, 2000, 4000, 8000\}$, 100 passos de tempo, uma execução por tamanho.
+    \item \textbf{Medições:} o tempo de \emph{solve} vem do próprio programa. O tempo do kernel e o tempo e o volume das cópias vêm do \texttt{nsys} (relatórios \texttt{cuda\_gpu\_kern\_sum}, \texttt{cuda\_gpu\_mem\_time\_sum} e \texttt{cuda\_gpu\_mem\_size\_sum}).
+\end{itemize}
+
+Compilação:
+
+\begin{lstlisting}[style=cstyle, language={}, numbers=none]
+gcc -O3 -fopenmp -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -o tarefa19 tarefa19.c -lm
+\end{lstlisting}
+
+Perfilamento (para cada $n$):
+
+\begin{lstlisting}[style=cstyle, language={}, numbers=none]
+nsys profile --trace=cuda,osrt --sample=none -o perfis/n$N ./tarefa19 $N 100
+\end{lstlisting}
+
+\section{Resultados}
+
+A Tabela~\ref{tab:tempos} mostra os tempos medidos. O tempo de \emph{solve} inclui o \emph{overhead} do profiler e a inicialização da GPU, pois cada tamanho foi uma execução única.
+
+\begin{table}[H]
+\centering
+\caption{Tempos por tamanho de grade (100 passos).}
+\label{tab:tempos}
+\begin{tabular}{rrrrrr}
+\toprule
+$n$ & Solve (s) & Kernel (s) & Cópia HtoD (s) & Cópia DtoH (s) & Dados (GB) \\
+\midrule
+500  & 0{,}233  & 0{,}041 & 0{,}022 & 0{,}024 & 0{,}8 \\
+1000 & 0{,}419  & 0{,}082 & 0{,}093 & 0{,}100 & 3{,}2 \\
+2000 & 1{,}294  & 0{,}281 & 0{,}376 & 0{,}407 & 12{,}8 \\
+4000 & 4{,}938  & 1{,}300 & 1{,}602 & 1{,}589 & 51{,}2 \\
+8000 & 19{,}349 & 5{,}331 & 7{,}255 & 6{,}313 & 204{,}8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A Tabela~\ref{tab:passo} compara, por passo de tempo, o custo do kernel com o das cópias.
+
+\begin{table}[H]
+\centering
+\caption{Custo por passo de tempo: kernel contra cópias.}
+\label{tab:passo}
+\begin{tabular}{rrrrr}
+\toprule
+$n$ & Kernel (ms) & Cópias (ms) & Cópias / kernel & Cópias no tempo de GPU \\
+\midrule
+500  & 0{,}41  & 0{,}46   & 1{,}1 & 53\,\% \\
+1000 & 0{,}82  & 1{,}94   & 2{,}4 & 70\,\% \\
+2000 & 2{,}81  & 7{,}83   & 2{,}8 & 74\,\% \\
+4000 & 13{,}00 & 31{,}91  & 2{,}5 & 71\,\% \\
+8000 & 53{,}31 & 135{,}68 & 2{,}5 & 72\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Análise}
+
+\begin{itemize}
+    \item \textbf{As cópias dominam o tempo.} Para $n \geq 1000$, cerca de 70\,\% do tempo de GPU ocupada é transferência de dados, e cada passo gasta cerca de 2,5 vezes mais tempo copiando do que calculando. Isso acontece porque o \texttt{map(tofrom)} em \texttt{solve()} copia os dois vetores nos dois sentidos a cada passo, embora \texttt{u} só seja lido e \texttt{u\_tmp} só seja escrito.
+    \item \textbf{O volume de dados confere com o esperado.} São $4 \cdot n^2 \cdot 8 \cdot \text{passos}$ bytes, por exemplo 204{,}8~GB para $n = 8000$. A taxa de cópia ficou perto de 16~GB/s, limitada pelo barramento entre CPU e GPU.
+    \item \textbf{O custo cresce com $n^2$.} Ao dobrar $n$, os tempos de kernel e de cópia crescem cerca de 4 vezes para grades grandes (de 4000 para 8000, o \emph{solve} passou de 4{,}9~s para 19{,}3~s).
+    \item \textbf{Grades pequenas têm custo fixo alto.} Para $n = 500$, o kernel e as cópias somam só 87~ms dos 233~ms de \emph{solve}. O restante é inicialização da GPU (criação do contexto, cerca de 88~ms) e alocações.
+ \end{itemize}
+
+\section{Conclusão}
+
+O programa executa corretamente na GPU e o erro L2 diminui com o refinamento da grade. O \texttt{nsys} mostrou que, na versão testada, a movimentação de dados é o principal gargalo: as cópias a cada passo ocupam cerca de 70\,\% do tempo de GPU e confirmam o volume previsto pelo código. A escolha da diretiva de paralelização também teve grande impacto no desempenho. Manter os dados na GPU durante o laço de tempo é o próximo passo para reduzir esse custo.
+
+\newpage
+\appendix
+
+\section{Código-Fonte}
+
+\lstinputlisting[style=cstyle, caption={Código-fonte da Tarefa 19 (\texttt{tarefa19.c})}, label=cod:tarefa19]{../src/tarefa19.c}
+
+\end{document}

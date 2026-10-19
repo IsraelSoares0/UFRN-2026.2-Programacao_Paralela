@@ -1,0 +1,29 @@
+=== GPU ===
+NVIDIA GeForce RTX 4070 SUPER, 595.99.02, 12282 MiB
+NVIDIA Nsight Systems version 2023.4.4.54-234433681190v0
+Importador: /usr/lib/nsight-systems/host-linux-x64/QdstrmImporter
+=== nsys | n=500 | nsteps=100 ===
+Convertendo n500.qdstrm -> n500.nsys-rep
+Processing [0%                                                                 ]Processing [1%                                                                 ]Processing [2%                                                                 ]Processing [=========19%                                                       ]Processing [=====================36%                                           ]Processing [==========================================================92%      ]Processing [===============================================================100%]
+Saved report file to "perfis/n500.nsys-rep"
+OK: perfis/n500.nsys-rep e perfis/n500_stats.txt
+=== nsys | n=1000 | nsteps=100 ===
+Convertendo n1000.qdstrm -> n1000.nsys-rep
+Processing [0%                                                                 ]Processing [1%                                                                 ]Processing [=======15%                                                         ]Processing [================29%                                                ]Processing [=================30%                                               ]Processing [===========================================================93%     ]Processing [===============================================================100%]
+Saved report file to "perfis/n1000.nsys-rep"
+OK: perfis/n1000.nsys-rep e perfis/n1000_stats.txt
+=== nsys | n=2000 | nsteps=100 ===
+Convertendo n2000.qdstrm -> n2000.nsys-rep
+Processing [0%                                                                 ]Processing [1%                                                                 ]Processing [3%                                                                 ]Processing [=======16%                                                         ]Processing [================29%                                                ]Processing [===========================================================93%     ]Processing [===============================================================100%]
+Saved report file to "perfis/n2000.nsys-rep"
+OK: perfis/n2000.nsys-rep e perfis/n2000_stats.txt
+=== nsys | n=4000 | nsteps=100 ===
+Convertendo n4000.qdstrm -> n4000.nsys-rep
+Processing [0%                                                                 ]Processing [1%                                                                 ]Processing [=======15%                                                         ]Processing [===============28%                                                 ]Processing [================29%                                                ]Processing [=================30%                                               ]Processing [===========================================================94%     ]Processing [===============================================================100%]
+Saved report file to "perfis/n4000.nsys-rep"
+OK: perfis/n4000.nsys-rep e perfis/n4000_stats.txt
+=== nsys | n=8000 | nsteps=100 ===
+Convertendo n8000.qdstrm -> n8000.nsys-rep
+Processing [0%                                                                 ]Processing [1%                                                                 ]Processing [=====12%                                                           ]Processing [=============24%                                                   ]Processing [=============25%                                                   ]Processing [==============26%                                                  ]Processing [===============27%                                                 ]Processing [===============28%                                                 ]Processing [================29%                                                ]Processing [=================30%                                               ]Processing [============================================================95%    ]Processing [===============================================================100%]
+Saved report file to "perfis/n8000.nsys-rep"
+OK: perfis/n8000.nsys-rep e perfis/n8000_stats.txt

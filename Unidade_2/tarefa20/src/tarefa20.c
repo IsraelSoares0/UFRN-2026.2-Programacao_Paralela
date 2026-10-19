@@ -1,4 +1,3 @@
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
@@ -9,45 +8,103 @@
 #define PI acos(-1.0) // Pi
 #define LINE "--------------------\n" // A line for fancy output
 
+// Arquivo CSV de saída com os resultados de todas as variações
+#define ARQUIVO_CSV "resultados_tarefa20.csv"
+
 // Function definitions
 void initial_value(const int n, const double dx, const double length, double * restrict u);
 void zero(const int n, double * restrict u);
 void solve(const int n, const double alpha, const double dx, const double dt, const double * restrict u, double * restrict u_tmp);
 double solution(const double t, const double x, const double y, const double alpha, const double length);
 double l2norm(const int n, const double * restrict u, const int nsteps, const double dt, const double alpha, const double dx, const double length);
+void executa(const int n, const int nsteps, double *solve_time, double *total_time, double *norm);
 
 // Main function
+// Sem argumentos: roda todas as variações definidas abaixo e salva no CSV.
+// Com 2 argumentos (n nsteps): roda apenas essa configuração (como no original).
 int main(int argc, char *argv[]) {
 
-  // Start the total program runtime timer
-  double start = omp_get_wtime();
-
-  // Problem size, forms an nxn grid
-  int n = 1000;
-
-  // Number of timesteps
-  int nsteps = 10;
-
+  // ---------- Variações a executar ----------
+  int tamanhos[] = {500, 1000, 2000, 4000, 8000}; // grade n x n
+  int ntam = 5;
+  int passos[] = {100};                           // passos de tempo
+  int npassos = 1;
+  int reps = 3;                                   // repetições por configuração
 
   // Check for the correct number of arguments
-  // Print usage and exits if not correct
   if (argc == 3) {
 
     // Set problem size from first argument
-    n = atoi(argv[1]);
+    int n = atoi(argv[1]);
     if (n < 0) {
       fprintf(stderr, "Error: n must be positive\n");
       exit(EXIT_FAILURE);
     }
 
     // Set number of timesteps from second argument
-    nsteps = atoi(argv[2]);
+    int nsteps = atoi(argv[2]);
     if (nsteps < 0) {
       fprintf(stderr, "Error: nsteps must be positive\n");
       exit(EXIT_FAILURE);
     }
+
+    tamanhos[0] = n;
+    ntam = 1;
+    passos[0] = nsteps;
+    npassos = 1;
+  }
+  int acrescentar = 0;
+  if (argc == 3) {
+    FILE *existente = fopen(ARQUIVO_CSV, "r");
+    if (existente != NULL) {
+      acrescentar = 1;
+      fclose(existente);
+    }
   }
 
+  FILE *csv = fopen(ARQUIVO_CSV, acrescentar ? "a" : "w");
+  if (csv == NULL) {
+    fprintf(stderr, "Error: nao foi possivel criar %s\n", ARQUIVO_CSV);
+    exit(EXIT_FAILURE);
+  }
+  if (!acrescentar)
+    fprintf(csv, "n,nsteps,rep,tempo_solve_s,tempo_total_s,erro_l2\n");
+
+  // Aquecimento
+  int aquece = 0;
+  #pragma omp target map(tofrom: aquece)
+  {
+    aquece += 1;
+  }
+
+  for (int a = 0; a < ntam; ++a) {
+    for (int b = 0; b < npassos; ++b) {
+      for (int rep = 1; rep <= reps; ++rep) {
+
+        printf("=== n=%d | nsteps=%d | rep=%d ===\n", tamanhos[a], passos[b], rep);
+
+        double solve_time, total_time, norm;
+        executa(tamanhos[a], passos[b], &solve_time, &total_time, &norm);
+
+        fprintf(csv, "%d,%d,%d,%lf,%lf,%E\n",
+                tamanhos[a], passos[b], rep, solve_time, total_time, norm);
+        fflush(csv);
+      }
+    }
+  }
+
+  fclose(csv);
+  printf("Resultados salvos em %s\n", ARQUIVO_CSV);
+
+  return 0;
+}
+
+
+// Uma execução completa do problema (corpo do main original)
+void executa(const int n, const int nsteps, double *solve_time, double *total_time, double *norm_out) {
+
+  // Start the total program runtime timer
+  double start = omp_get_wtime();
 
   //
   // Set problem definition
@@ -105,7 +162,9 @@ int main(int argc, char *argv[]) {
     u = u_tmp;
     u_tmp = tmp;
   }
-  #pragma omp target exit data map(from: u[0:n*n])
+  // u_tmp também é liberado na GPU: como agora há várias execuções no mesmo
+  // processo, o mapeamento antigo não pode ficar para trás.
+  #pragma omp target exit data map(from: u[0:n*n]) map(release: u_tmp[0:n*n])
   // Stop solve timer
   double toc = omp_get_wtime();
 
@@ -124,6 +183,10 @@ int main(int argc, char *argv[]) {
   printf("Solve time (s): %lf\n", toc-tic);
   printf("Total time (s): %lf\n", stop-start);
   printf(LINE);
+
+  *solve_time = toc - tic;
+  *total_time = stop - start;
+  *norm_out = norm;
 
   // Free the memory
   free(u);
@@ -165,8 +228,7 @@ void solve(const int n, const double alpha, const double dx, const double dt, co
   const double r2 = 1.0 - 4.0*r;
 
   // Loop over the nxn grid
-  #pragma omp target
-  #pragma omp loop collapse(2)
+  #pragma omp target teams loop collapse(2) map(tofrom: u[0:n*n], u_tmp[0:n*n])
   for (int i = 0; i < n; ++i) {
     for (int j = 0; j < n; ++j) {
 

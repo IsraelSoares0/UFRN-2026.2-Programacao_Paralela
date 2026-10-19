@@ -8,8 +8,28 @@
 #define LINE "--------------------\n"
 
 /**
+ * PARAMETROS DA COLETA DE DADOS (substituem o antigo tarefa19.sh)
+ *
+ * ./tarefa19            -> varre os tamanhos abaixo, REPS repeticoes cada,
+ *                          e grava os tempos em ARQUIVO_CSV
+ * ./tarefa19 <n> <nsteps> -> uma unica execucao (como no codigo original),
+ *                          util para perfilar com nsys
+ */
+#ifndef REPS
+#define REPS 3                       // repeticoes por tamanho
+#endif
+#ifndef NSTEPS
+#define NSTEPS 100                   // passos de tempo na varredura
+#endif
+#define ARQUIVO_CSV "resultados_tarefa19.csv"
+
+static const int TAMANHOS[] = {500, 1000, 2000, 4000, 8000};   // grade n x n
+#define N_TAMANHOS ((int)(sizeof(TAMANHOS) / sizeof(TAMANHOS[0])))
+
+/**
  * DEFINICOES DE FUNCAO
  */
+void executa(int n, int nsteps, double *solve_time, double *total_time, double *norm_out);
 void initial_value(const int n, const double dx, const double length, double * restrict u);
 void zero(const int n, double * restrict u);
 void solve(const int n, const double alpha, const double dx, const double dt, const double * restrict u, double * restrict u_tmp);
@@ -21,19 +41,18 @@ double l2norm(const int n, const double * restrict u, const int nsteps, const do
  */
 int main(int argc, char *argv[]) {
 
-  // Start the total program runtime timer
-  double start = omp_get_wtime();
+  printf("Dispositivos OpenMP: %d\n", omp_get_num_devices());
 
-  // Problem size, forms an nxn grid
-  int n = 1000;
+  double solve_time, total_time, norm;
 
-  // Number of timesteps
-  int nsteps = 10;
-
-
-  // Check for the correct number of arguments
-  // Print usage and exits if not correct
+  // Execucao unica, como no codigo original
   if (argc == 3) {
+
+    // Problem size, forms an nxn grid
+    int n = 1000;
+
+    // Number of timesteps
+    int nsteps = 10;
 
     // Set problem size from first argument
     n = atoi(argv[1]);
@@ -48,7 +67,49 @@ int main(int argc, char *argv[]) {
       fprintf(stderr, "Error: nsteps must be positive\n");
       exit(EXIT_FAILURE);
     }
+
+    executa(n, nsteps, &solve_time, &total_time, &norm);
+    return 0;
   }
+
+  // Varredura de tamanhos e repeticoes
+  FILE *csv = fopen(ARQUIVO_CSV, "w");
+  if (!csv) {
+    perror("Erro ao abrir " ARQUIVO_CSV);
+    return EXIT_FAILURE;
+  }
+  fprintf(csv, "n,nsteps,rep,tempo_solve_s,tempo_total_s,erro_l2\n");
+
+  // Inicializa o contexto da GPU antes das medicoes
+  int dummy = 0;
+  #pragma omp target map(tofrom: dummy)
+  { dummy += 1; }
+
+  for (int k = 0; k < N_TAMANHOS; ++k) {
+    int n = TAMANHOS[k];
+
+    printf("=== n=%d | aquecimento (descartado) ===\n", n);
+    executa(n, NSTEPS, &solve_time, &total_time, &norm);
+
+    for (int rep = 1; rep <= REPS; ++rep) {
+      printf("=== n=%d | rep=%d ===\n", n, rep);
+      executa(n, NSTEPS, &solve_time, &total_time, &norm);
+      fprintf(csv, "%d,%d,%d,%lf,%lf,%E\n", n, NSTEPS, rep, solve_time, total_time, norm);
+      fflush(csv);
+    }
+  }
+
+  fclose(csv);
+  printf("Concluido. Resultados em %s\n", ARQUIVO_CSV);
+  return 0;
+}
+
+
+// Corpo do main original: uma execucao completa para um n e nsteps
+void executa(int n, int nsteps, double *solve_time, double *total_time, double *norm_out) {
+
+  // Start the total program runtime timer
+  double start = omp_get_wtime();
 
 
   //
@@ -133,6 +194,11 @@ int main(int argc, char *argv[]) {
   printf("Total time (s): %lf\n", stop-start);
   printf(LINE);
 
+  // Devolve os valores para a coleta de dados
+  *solve_time = toc - tic;
+  *total_time = stop - start;
+  *norm_out   = norm;
+
   // Free the memory
   free(u);
   free(u_tmp);
@@ -176,8 +242,7 @@ void solve(const int n, const double alpha, const double dx, const double dt, co
   const double r2 = 1.0 - 4.0*r;
 
   // Loop over the nxn grid
-  #pragma omp target map(tofrom: u[0:n*n], u_tmp[0:n*n])
-  #pragma omp loop collapse(2)
+  #pragma omp target teams loop collapse(2) map(tofrom: u[0:n*n], u_tmp[0:n*n])
   for (int i = 0; i < n; ++i) {
     for (int j = 0; j < n; ++j) {
 
